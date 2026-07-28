@@ -19,6 +19,12 @@ export const ORDER_PAGE_SIZE = 25;
 /** How far the order watermark is rewound before each run. */
 export const ORDER_OVERLAP_MS = 2 * 60 * 1000;
 
+/** Targeted order fetches allowed per run, so a large backlog cannot dominate it. */
+export const MISSING_ORDER_LIMIT = 25;
+
+/** How many recent payout lines are scanned for a missing source order. */
+const MISSING_ORDER_SCAN = 500;
+
 const ORDER_NODE_FIELDS = `
   id
   name
@@ -49,6 +55,14 @@ const ORDERS_DELTA_QUERY = `#graphql
         }
       }
       pageInfo { hasNextPage endCursor }
+    }
+  }`;
+
+const ORDER_BY_ID_QUERY = `#graphql
+  query OrderById($id: ID!) {
+    node(id: $id) {
+      ... on Order {${ORDER_NODE_FIELDS}
+      }
     }
   }`;
 
@@ -87,6 +101,10 @@ interface OrdersDeltaData {
     edges: { node: OrderNode }[];
     pageInfo: { hasNextPage: boolean; endCursor: string | null };
   };
+}
+
+interface OrderByIdData {
+  node?: (Partial<OrderNode> & { id?: string }) | null;
 }
 
 interface OrderFields {
@@ -238,6 +256,64 @@ export async function upsertOrder(
 
   for (const refund of node.refunds ?? []) {
     await upsertRefund(tx, ctx, refund, orderId, fields.processedAt);
+  }
+}
+
+/**
+ * Fetches orders that payout lines point at but the mirror does not have.
+ * These are the `source_missing` charges: an order older than the first sync
+ * window, or one changed before the app was installed. Bounded per run; an
+ * order Shopify will not return leaves its line unmatched, which the
+ * discrepancy queue surfaces rather than hiding.
+ */
+export async function fetchMissingOrders(ctx: SyncContext): Promise<void> {
+  const referenced = await db.balanceTransaction.findMany({
+    where: { shop: ctx.shop, associatedOrderGid: { not: null } },
+    select: { associatedOrderGid: true },
+    distinct: ["associatedOrderGid"],
+    orderBy: { transactionDate: "desc" },
+    take: MISSING_ORDER_SCAN,
+  });
+  const gids = referenced
+    .map((row) => row.associatedOrderGid)
+    .filter((gid): gid is string => Boolean(gid));
+
+  if (gids.length === 0) {
+    return;
+  }
+
+  const known = await db.order.findMany({
+    where: { shop: ctx.shop, shopifyGid: { in: gids } },
+    select: { shopifyGid: true },
+  });
+  const knownGids = new Set(known.map((order) => order.shopifyGid));
+  const missing = gids.filter((gid) => !knownGids.has(gid)).slice(0, MISSING_ORDER_LIMIT);
+
+  for (const gid of missing) {
+    const data = await ctx.client.request<OrderByIdData>("OrderById", ORDER_BY_ID_QUERY, {
+      id: gid,
+    });
+    const node = data.node;
+
+    if (!node?.id || !node.updatedAt) {
+      logger.warn("sync.order_unreadable", { shop: ctx.shop, runId: ctx.runId, order: gid });
+      continue;
+    }
+
+    await db.$transaction(async (tx) => {
+      await upsertOrder(tx, ctx, node as OrderNode);
+    });
+
+    ctx.counters.ordersSeen += 1;
+    await ctx.heartbeat();
+  }
+
+  if (missing.length > 0) {
+    logger.info("sync.missing_orders_fetched", {
+      shop: ctx.shop,
+      runId: ctx.runId,
+      requested: missing.length,
+    });
   }
 }
 
