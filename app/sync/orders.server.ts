@@ -351,11 +351,15 @@ export async function syncOrders(ctx: SyncContext): Promise<void> {
       }
 
       if (watermark) {
-        await tx.syncCursor.upsert({
+        const cursor = await tx.syncCursor.findUnique({
           where: { shop_resource: { shop: ctx.shop, resource: "orders" } },
-          create: { shop: ctx.shop, resource: "orders", watermark },
-          update: { watermark },
         });
+
+        if (!cursor) {
+          await tx.syncCursor.create({ data: { shop: ctx.shop, resource: "orders", watermark } });
+        } else if (cursor.watermark?.getTime() !== watermark.getTime()) {
+          await tx.syncCursor.update({ where: { id: cursor.id }, data: { watermark } });
+        }
       }
     });
 

@@ -268,11 +268,15 @@ async function commitPayoutPage(
     }
 
     if (watermark) {
-      await tx.syncCursor.upsert({
+      const cursor = await tx.syncCursor.findUnique({
         where: { shop_resource: { shop: ctx.shop, resource: "payouts" } },
-        create: { shop: ctx.shop, resource: "payouts", watermark },
-        update: { watermark },
       });
+
+      if (!cursor) {
+        await tx.syncCursor.create({ data: { shop: ctx.shop, resource: "payouts", watermark } });
+      } else if (cursor.watermark?.getTime() !== watermark.getTime()) {
+        await tx.syncCursor.update({ where: { id: cursor.id }, data: { watermark } });
+      }
     }
   });
 
