@@ -1,4 +1,5 @@
 import type { GraphqlExecutor, ThrottledClient } from "./throttle.server";
+import { syncOrders } from "./orders.server";
 import { syncPayouts } from "./payouts.server";
 import { createThrottledClient } from "./throttle.server";
 
@@ -174,6 +175,7 @@ export async function executeRun(
     };
 
     await syncPayouts(ctx);
+    await syncOrders(ctx);
     await completeRun(shop, runId, counters);
   } catch (error) {
     await failRun(shop, runId, counters, error);
