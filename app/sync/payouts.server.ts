@@ -227,6 +227,20 @@ function payoutFields(node: PayoutNode, ianaTimezone: string): PayoutFields {
 }
 
 /**
+ * The update payload for a payout that already exists locally. A status change
+ * re-opens its transaction set: lines are still added while a payout settles,
+ * so the completeness stamp has to be earned again by a fresh fetch instead of
+ * freezing whatever was visible before the flip.
+ */
+function payoutUpdateData(existing: { status: string }, fields: PayoutFields) {
+  if (existing.status === fields.status) {
+    return fields;
+  }
+
+  return { ...fields, transactionsSyncedAt: null };
+}
+
+/**
  * Writes one payout, skipping the update entirely when nothing changed. The
  * derived rollup columns are never touched here; only the recon pass owns
  * them.
@@ -250,7 +264,7 @@ async function upsertPayout(
     return;
   }
 
-  await tx.payout.update({ where: { id: existing.id }, data: fields });
+  await tx.payout.update({ where: { id: existing.id }, data: payoutUpdateData(existing, fields) });
 }
 
 /**
@@ -474,7 +488,7 @@ async function refreshNonTerminalPayouts(ctx: SyncContext): Promise<void> {
     const fields = payoutFields(node as PayoutNode, ctx.ianaTimezone);
 
     if (!isUnchanged(payout, fields)) {
-      await db.payout.update({ where: { id: payout.id }, data: fields });
+      await db.payout.update({ where: { id: payout.id }, data: payoutUpdateData(payout, fields) });
       logger.info("sync.payout_refreshed", {
         shop: ctx.shop,
         runId: ctx.runId,

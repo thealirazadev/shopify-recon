@@ -161,6 +161,22 @@ const CHARGE_9002 = {
   associatedOrder: { id: "gid://shopify/Order/5999", name: "#1099" },
 };
 
+/** The in-transit payout once it settles, with the line it gained on the way. */
+const SETTLED_9002 = { ...PAYOUT_IN_TRANSIT, status: "PAID" };
+
+const LATE_ADJUSTMENT_9002 = {
+  id: "gid://shopify/ShopifyPaymentsBalanceTransaction/1005",
+  type: "adjustment",
+  transactionDate: "2026-07-25T12:00:00Z",
+  amount: money("-2.00"),
+  fee: money("0.00"),
+  net: money("-2.00"),
+  sourceId: null,
+  sourceType: null,
+  sourceOrderTransactionId: null,
+  associatedOrder: null,
+};
+
 const ORDER_5001 = {
   id: "gid://shopify/Order/5001",
   name: "#1001",
@@ -417,6 +433,86 @@ describe("sync engine", () => {
       chargesGross: "20600",
       chargesFee: "600",
     });
+  });
+
+  it("refetches the transaction set of a payout that settled", async () => {
+    const engine = await freshEngine();
+
+    await engine.executeRun(makeStub().execute, SHOP, await claimOrThrow(engine, "manual"), {
+      sleep: noSleep,
+    });
+
+    const settledStub = makeStub({
+      PayoutsPage: () =>
+        ok({
+          shopifyPaymentsAccount: {
+            payouts: {
+              edges: [{ node: PAYOUT_PAID }, { node: SETTLED_9002 }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        }),
+      PayoutTransactionsPage: (variables) =>
+        payoutIdOf(variables) === "9001"
+          ? transactionsPage([CHARGE_9001, REFUND_9001])
+          : transactionsPage([CHARGE_9002, LATE_ADJUSTMENT_9002]),
+    });
+
+    await engine.executeRun(settledStub.execute, SHOP, await claimOrThrow(engine, "poll"), {
+      sleep: noSleep,
+    });
+
+    const payout = await db.payout.findFirstOrThrow({
+      where: { shop: SHOP, shopifyGid: PAYOUT_IN_TRANSIT.id },
+    });
+
+    expect(payout.status).toBe("paid");
+    // Lines are still added while a payout settles, so a status change has to
+    // re-open the set: the stamp is earned again from a fresh fetch.
+    expect(payout.transactionsSyncedAt).not.toBeNull();
+    expect(await db.balanceTransaction.count({ where: { payoutId: payout.id } })).toBe(2);
+  });
+
+  it("re-opens the transaction set when a node refresh settles a payout", async () => {
+    const engine = await freshEngine();
+
+    await engine.executeRun(makeStub().execute, SHOP, await claimOrThrow(engine, "manual"), {
+      sleep: noSleep,
+    });
+
+    // The payout has dropped out of the page window, so only the non-terminal
+    // refresh sees it settle.
+    const settledStub = makeStub({
+      PayoutsPage: () =>
+        ok({
+          shopifyPaymentsAccount: {
+            payouts: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          },
+        }),
+      PayoutById: (variables, query) =>
+        ok({
+          node: selectedFields(
+            variables.id === PAYOUT_IN_TRANSIT.id ? SETTLED_9002 : PAYOUT_PAID,
+            query,
+          ),
+        }),
+      PayoutTransactionsPage: (variables) =>
+        payoutIdOf(variables) === "9001"
+          ? transactionsPage([CHARGE_9001, REFUND_9001])
+          : transactionsPage([CHARGE_9002, LATE_ADJUSTMENT_9002]),
+    });
+
+    await engine.executeRun(settledStub.execute, SHOP, await claimOrThrow(engine, "poll"), {
+      sleep: noSleep,
+    });
+
+    const payout = await db.payout.findFirstOrThrow({
+      where: { shop: SHOP, shopifyGid: PAYOUT_IN_TRANSIT.id },
+    });
+
+    expect(payout.status).toBe("paid");
+    expect(payout.transactionsSyncedAt).not.toBeNull();
+    expect(await db.balanceTransaction.count({ where: { payoutId: payout.id } })).toBe(2);
   });
 
   it("changes nothing when the same fixtures are synced twice", async () => {
