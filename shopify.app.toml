@@ -1,0 +1,20 @@
+client_id = "00000000000000000000000000000000"
+name = "shopify-recon"
+application_url = "https://example-tunnel.trycloudflare.com"
+embedded = true
+
+[access_scopes]
+scopes = "read_orders,read_shopify_payments_payouts"
+
+[auth]
+redirect_urls = [
+  "https://example-tunnel.trycloudflare.com/auth/callback",
+  "https://example-tunnel.trycloudflare.com/auth/shopify/callback",
+  "https://example-tunnel.trycloudflare.com/api/auth/callback",
+]
+
+[webhooks]
+api_version = "2025-01"
+
+[pos]
+embedded = false
