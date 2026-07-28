@@ -6,12 +6,15 @@ import polarisTranslations from "@shopify/polaris/locales/en.json";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 
+import { ensureShopSettings } from "~/lib/shop.server";
 import { authenticate } from "~/shopify.server";
 
 // Every embedded route under app.* authenticates via authenticate.admin,
 // which redirects into OAuth when there is no valid session token.
 export async function loader({ request }: LoaderFunctionArgs) {
-  await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+
+  await ensureShopSettings(admin, session.shop);
 
   return json({ apiKey: process.env.SHOPIFY_API_KEY ?? "" });
 }
