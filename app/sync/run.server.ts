@@ -1,7 +1,10 @@
-import type { ThrottledClient } from "./throttle.server";
+import type { GraphqlExecutor, ThrottledClient } from "./throttle.server";
+import { syncPayouts } from "./payouts.server";
+import { createThrottledClient } from "./throttle.server";
 
 import db from "~/db.server";
 import { logger } from "~/lib/logger.server";
+import { loadShopSettings } from "~/lib/shop.server";
 
 // Single flight per shop. A run is claimed by writing a SyncRun row inside a
 // transaction that first checks no other run for the shop is still alive; a
@@ -135,4 +138,74 @@ export async function failRun(
       error: writeError instanceof Error ? writeError.message : String(writeError),
     });
   }
+}
+
+export interface ExecuteRunOptions {
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Runs an already-claimed sync to a terminal state. Never throws: the outcome
+ * of a run is the SyncRun row, and a background caller has nowhere to put an
+ * exception. Cursors hold at the last committed page, so the next trigger
+ * resumes rather than restarts.
+ */
+export async function executeRun(
+  execute: GraphqlExecutor,
+  shop: string,
+  runId: string,
+  options: ExecuteRunOptions = {},
+): Promise<void> {
+  const client = createThrottledClient(execute, shop, { runId, sleep: options.sleep });
+  const counters = newCounters();
+
+  logger.info("sync.started", { shop, runId });
+
+  try {
+    const settings = await loadShopSettings(client, shop);
+    const ctx: SyncContext = {
+      shop,
+      runId,
+      client,
+      currency: settings.currency,
+      ianaTimezone: settings.ianaTimezone,
+      counters,
+      heartbeat: () => heartbeat(runId),
+    };
+
+    await syncPayouts(ctx);
+    await completeRun(shop, runId, counters);
+  } catch (error) {
+    await failRun(shop, runId, counters, error);
+  }
+}
+
+/**
+ * Claims the shop's sync slot and runs it in the background. Returns the run
+ * id, or null when a run is already active, which every trigger path reports
+ * as CONFLICT.
+ */
+export async function startRun(
+  execute: GraphqlExecutor,
+  shop: string,
+  trigger: SyncTrigger,
+): Promise<string | null> {
+  const runId = await claimRun(shop, trigger);
+
+  if (!runId) {
+    return null;
+  }
+
+  // Deliberately not awaited: the trigger answers immediately and the SyncRun
+  // row carries the outcome. executeRun records its own failures, so this
+  // catch only guards against an unexpected rejection escaping it.
+  executeRun(execute, shop, runId).catch((error: unknown) => {
+    logger.error("sync.failed", {
+      shop,
+      runId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  return runId;
 }
