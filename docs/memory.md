@@ -229,3 +229,45 @@ been run against a live store, and no test in this phase uses a mocked Admin API
   Prisma client. Reason: the correctness claims are about row-level effects across transactions,
   which a mocked Prisma client cannot prove. The GraphQL executor is a stub over hand-written
   fixture pages, so no test touches the network.
+- 2026-07-29 - Phase 2 correctness review, five defects found and fixed (one commit each), full
+  suite green afterwards (61 tests across 6 files: `npx vitest run`).
+  1. `PayoutById` did not select `summary`, so the non-terminal refresh mapped `summaryJson` to
+     `"{}"` and blanked what the payouts page had stored, on every run. Both payout documents now
+     share one `PAYOUT_NODE_FIELDS` selection. This also broke invariant 2: the refresh was a row
+     change every run, so re-syncing unchanged data was not a no-op.
+  2. A payout that settled kept the transaction set it had while in transit. The page pass or the
+     node refresh flipped `status` to `paid`, and the transaction pass then skipped it because it
+     was terminal and already stamped, so lines added at settlement were never read and the rollup
+     would call a stale set reconciled. A status change now clears `transactionsSyncedAt`, so the
+     stamp is earned again from a fresh fetch in the same run. This refines the earlier
+     "stamped only while null" decision: still no re-stamping in the steady state, but a status
+     change re-opens the set.
+  3. `completeRun` and `failRun` wrote by id alone, so a run that had already been superseded by a
+     claimant resurrected itself as `completed` when it finally finished, overwriting the
+     claimant's verdict and its counters. Both writes are now scoped to a still-running row and
+     log `sync.finish_ignored` when the row has moved on.
+  4. The payout list treated any `running` row as a live sync, so a run left behind by a crashed
+     process disabled the "Sync now" button until the next poll superseded it (up to
+     `RECON_POLL_MINUTES`, default six hours), which is exactly when an operator wants to trigger
+     one by hand. The loader and `claimRun` now share `liveRun()`, which applies the same
+     `STALE_RUN_MS` heartbeat test.
+  5. The poller recorded `lastStartedAt` only after `startRun` returned, so a shop whose admin
+     context could not be built (revoked or missing token) was retried on every 15-second tick
+     forever. The attempt is recorded before it starts, which is what the code's own comment
+     claimed. `tick` is now exported and covered by `app/sync/poller.test.ts`.
+- 2026-07-29 - Test fixtures now project to the fields their document selects (`selectedFields` in
+  `app/sync/sync.test.ts`). Reason: defect 1 was invisible because the `PayoutById` stub returned
+  the whole payout fixture including a `summary` the query never asked for. A stub that is more
+  generous than Shopify hides exactly the class of bug it exists to catch.
+- 2026-07-29 - Known limitation, not fixed: `claimRun` is a read-then-insert inside one
+  transaction. On SQLite (the default) Prisma holds a single connection, so claims serialize and
+  the single-flight guarantee holds, which is what the tests assert. On PostgreSQL under READ
+  COMMITTED two simultaneous claims could both see no live run and both insert. Closing that needs
+  a uniqueness constraint on the claim (a new nullable column plus a unique index), which changes
+  the `SyncRun` contract in `docs/architecture.md` and so needs owner approval first. Damage today
+  is bounded: every write in the engine is an idempotent upsert, so a double run wastes API budget
+  rather than corrupting the mirror.
+- 2026-07-29 - Known limitation, not fixed: `fetchMissingOrders` takes the newest 25 missing order
+  gids per run, so 25 or more permanently unreadable recent orders would starve the ones behind
+  them. Phase 3 replaces this stand-in selection with the documented `partial` plus
+  `source_missing` match state, which is where the fix belongs.
