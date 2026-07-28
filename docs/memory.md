@@ -15,10 +15,66 @@ work; log every non-obvious decision with its reason. Keep entries short and dat
   `lib/money.ts`, `lib/dates.ts`, `lib/logger.server.ts`, `lib/errors.ts`, first-load shop
   bootstrap, the webhook route with the uninstall, scopes, and compliance topics, and unit tests
   for the two pure libraries.
+- 2026-07-29 - Phase 2 implemented in the nine commits listed in `docs/phases.md`, plus one
+  corrective commit (`fix: skip unchanged cursor writes`): `sync/throttle.server.ts` (cost-aware
+  client, the single Admin API path), `sync/run.server.ts` (claim, heartbeat, supersede,
+  counters, terminal status, orchestration), `sync/payouts.server.ts` (newest-first paging with
+  a 3-day overlap, non-terminal refresh by node lookup, per-payout balance transactions),
+  `sync/orders.server.ts` (incremental order, transaction and refund sync plus the targeted
+  order fetch), `sync/poller.server.ts` (interval singleton and pending-trigger drain), the
+  payouts webhook trigger, the "Sync now" action with its `CONFLICT` guard, `lib/diff.ts`, and
+  the throttle, diff, and sync-engine test suites.
 
 ## Project status
 
-- Phase 1 complete and awaiting owner approval. Phase 2 (sync engine) not started.
+- Phase 1 and Phase 2 complete and awaiting owner approval. Phase 3 (recon: matching, rollup,
+  discrepancies) not started; `executeRun` deliberately ends after the sync and does not call a
+  recon pass yet.
+
+### Phase 2 verification, actually observed on 2026-07-29
+
+Ran and passed locally:
+
+- `npm run typecheck`, `npm run lint`, and `npm run build`: clean after every commit.
+- `npm test`: 53 tests across five files, all passing. New in this phase: `sync/throttle.test.ts`
+  (9), `lib/diff.test.ts` (4), `sync/sync.test.ts` (9).
+- Idempotency: `sync.test.ts` runs the engine twice over identical fixtures and compares a
+  serialization of every mirrored row (Shop, Payout, BalanceTransaction, Order, OrderTransaction,
+  Refund, SyncCursor) including `updatedAt`. The two snapshots are byte-identical.
+- Crash recovery: aborting the stubbed run on page two of a payout's transactions leaves
+  `transactionsSyncedAt` null and one committed row; the next run re-reads that payout from page
+  one (asserted on the stub's recorded `after: null`), converges to two rows, and creates no
+  duplicates.
+- Claims: two concurrent `claimRun` calls produce exactly one `running` run and one refusal; a
+  run whose `heartbeatAt` is older than five minutes is marked `superseded` by the next claimant;
+  a live run refuses the second claim.
+- Throttling: a simulated `currentlyAvailable` of 5 against an observed cost of 10 at a restore
+  rate of 50 produces exactly the computed 100 ms sleep; a `THROTTLED` response is retried once
+  and a second one fails the run with both cursor watermarks unchanged.
+- Every log key the Phase 2 definition of done lists is emitted by committed code: `sync.started`,
+  `sync.page_committed`, `sync.completed`, `sync.failed`, `sync.throttled`, `sync.unknown_type`,
+  `webhook.received`.
+- One Admin API path confirmed by grep: `admin.graphql` appears only inside
+  `sync/throttle.server.ts`.
+
+Not verified, because no dev store and no Shopify credentials are available on this machine:
+
+- Everything in the checklist's "Against a dev store" line: initial sync mirroring real payout and
+  order counts, and a new test order appearing after the next run.
+- Whether the pinned API version (2025-01) actually exposes the fields and arguments the queries
+  use. `shopifyPaymentsAccount.balanceTransactions(query: "payout_id:<legacyId>")`, the six
+  `payout.summary` money fields, and `Order.refunds(first:)` were taken from
+  `docs/api-contracts.md`, not from a live schema. If any diverges, the run fails loudly with
+  `UPSTREAM_ERROR` and the cursors hold, but the divergence itself is unproven.
+- Whether Shopify returns `sourceOrderTransactionId` as a legacy numeric id (the sync promotes a
+  numeric value to `gid://shopify/OrderTransaction/<id>` and passes anything else through
+  unchanged).
+- Payouts webhook delivery, the poller running on a real interval, and the "Sync now" button
+  inside the Admin iframe. The poller interval and the manual action are exercised only through
+  their shared `claimRun` path in tests.
+
+Every fixture in the sync tests is mocked, hand-written from `docs/api-contracts.md`. Nothing in
+this phase has been run against a live store.
 
 ### Phase 1 verification, actually observed on 2026-07-28
 
@@ -115,3 +171,61 @@ been run against a live store, and no test in this phase uses a mocked Admin API
   requires explicit human consent for that destructive command and none was given. Verified the
   same property non-destructively by applying the migration to a fresh throwaway SQLite file and
   inspecting the resulting tables and indexes.
+- 2026-07-29 - Phase 1's flagged deviation is resolved: `lib/shop.server.ts` now takes a
+  `ThrottledClient` instead of the raw admin context, so every Admin API call in the app goes
+  through `sync/throttle.server.ts`. The same module gained `loadShopSettings`, which re-reads the
+  shop's currency and timezone at the start of every run and logs `shop.settings_changed` when
+  either moved, per the architecture's timezone section. Bootstrap still swallows failures (a page
+  load must never be blocked by a transient Admin error) while `loadShopSettings` throws, because
+  a run that cannot read the payout currency must fail rather than guess.
+- 2026-07-29 - Added `app/lib/diff.ts` (`isUnchanged`), which is not in the architecture's file
+  tree. Flagged for owner review. Reason: Phase 1 recorded that Prisma's `@updatedAt` bumps on
+  every `update` call, so idempotency requires comparing the mapped row against the stored one and
+  skipping no-op writes; five models across two sync modules need that comparison, and copies of
+  it in each would be worse than one pure twenty-line function. It is pure and unit-tested.
+- 2026-07-29 - The payouts watermark advances only inside the transaction that commits the last
+  page of the payout pass, not on every page. Reason: payouts page newest-first, so advancing on
+  page one would let a crash on page two skip everything behind it forever. Order pages, which run
+  oldest-first, do advance per page as the architecture describes. Every page's rows still commit
+  atomically with whatever cursor movement accompanies them, which is the invariant that matters.
+- 2026-07-29 - Cursor rows are only written when the watermark actually moves (its own corrective
+  commit, a tenth beyond the nine `docs/phases.md` lists). Reason: `SyncCursor.updatedAt` is
+  `@updatedAt`, so an unconditional upsert made a second identical run a row change and the
+  idempotency assertion could not be total.
+- 2026-07-29 - `transactionsSyncedAt` is stamped only while it is null, never refreshed. Reason:
+  non-terminal payouts are refetched on every run by design, and re-stamping them would make every
+  run a row change. The column's meaning is null versus not-null ("is this transaction set
+  complete"), so keeping the first completion time is both correct and idempotent.
+- 2026-07-29 - The payouts webhook topic is not registered in `shopify.server.ts`. Instead
+  `actionForTopic` maps any delivered topic whose name contains "payout" to a sync trigger.
+  Reason: the topic's name and availability on API version 2025-01 cannot be verified from this
+  machine, and registering a wrong topic string risks failing the registration of the five topics
+  that do work. The architecture already treats the webhook as a latency optimization only, so the
+  poller carries freshness alone until the topic is confirmed against a real store.
+- 2026-07-29 - The webhook handler records the trigger in an in-memory set that the poller drains
+  every 15 seconds, rather than in a table. Reason: the schema has no pending-trigger column,
+  exactly one app instance runs in production (launch checklist), and a lost trigger costs only
+  latency because the interval converges anyway. Adding a table would need a migration for state
+  that is worthless after a restart.
+- 2026-07-29 - `sourceOrderTransactionId` is promoted from Shopify's legacy numeric id to
+  `gid://shopify/OrderTransaction/<id>` at the edge; a non-numeric value passes through unchanged.
+  Reason: `docs/architecture.md` documents that column as the join key to
+  `OrderTransaction.shopifyGid`, and normalizing at write time is what makes the Phase 3 match a
+  plain equality join. Unverified against a live API.
+- 2026-07-29 - `executeRun` never throws; the `SyncRun` row is the outcome of a run. Reason: it is
+  started fire-and-forget from the poller and the manual action, where an exception has nowhere to
+  go, and every trigger path already reads the run row.
+- 2026-07-29 - Bounds that the docs left open: non-terminal payout refresh at 200 node lookups per
+  run, targeted order fetch at 25 per run over the 500 most recent referenced payout lines, order
+  pages at 25 (each carries up to 50 transactions and 50 refunds inline, so a larger page would be
+  an expensive single query). Reason: every one of these is an unbounded external cost otherwise;
+  all of them converge over successive runs.
+- 2026-07-29 - An order with no `processedAt`, and an order transaction or refund with no date of
+  its own, fall back to the order's last update. Reason: the columns are non-null and aging
+  detection needs a date; the last update is the closest honest stand-in and never invents one.
+  A balance transaction with no `fee` stores `0`, which is what an absent fee means.
+- 2026-07-29 - The sync tests run the real engine against a real SQLite file (a migrated template
+  copied per test) with `vi.resetModules()` and a deleted `prismaGlobal` so each test gets its own
+  Prisma client. Reason: the correctness claims are about row-level effects across transactions,
+  which a mocked Prisma client cannot prove. The GraphQL executor is a stub over hand-written
+  fixture pages, so no test touches the network.
