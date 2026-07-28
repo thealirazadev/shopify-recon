@@ -39,6 +39,21 @@ export function newCounters(): SyncCounters {
 }
 
 /**
+ * The run that is genuinely in progress, for the claim path and for the UI. A
+ * row left `running` by a crashed process is not one: its heartbeat stopped,
+ * the next claimant supersedes it, and until then it must not be reported as a
+ * live sync or the manual trigger stays disabled with nothing behind it.
+ */
+export function liveRun<T extends { status: string; heartbeatAt: Date }>(
+  runs: T[],
+  now: Date = new Date(),
+): T | null {
+  const staleBefore = new Date(now.getTime() - STALE_RUN_MS);
+
+  return runs.find((run) => run.status === "running" && run.heartbeatAt > staleBefore) ?? null;
+}
+
+/**
  * Claims the shop's sync slot. Returns the new run id, or null when another
  * run is alive, which is the CONFLICT every trigger path reports. Throws only
  * when the database itself fails, so a lost claim is never mistaken for a
@@ -52,11 +67,10 @@ export async function claimRun(
   return db.$transaction(async (tx) => {
     const active = await tx.syncRun.findMany({
       where: { shop, status: "running" },
-      select: { id: true, heartbeatAt: true },
+      select: { id: true, status: true, heartbeatAt: true },
     });
-    const staleBefore = new Date(now.getTime() - STALE_RUN_MS);
 
-    if (active.some((run) => run.heartbeatAt > staleBefore)) {
+    if (liveRun(active, now)) {
       return null;
     }
 

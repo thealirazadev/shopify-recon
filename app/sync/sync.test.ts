@@ -666,6 +666,28 @@ describe("run claims", () => {
     expect(runId).not.toBe(stale.id);
   });
 
+  it("reports no live run once a heartbeat goes stale", async () => {
+    const engine = await freshEngine();
+    const now = new Date();
+    const crashed = {
+      id: "crashed",
+      status: "running",
+      heartbeatAt: new Date(now.getTime() - engine.STALE_RUN_MS - 1_000),
+    };
+    const beating = {
+      id: "beating",
+      status: "running",
+      heartbeatAt: new Date(now.getTime() - 30_000),
+    };
+
+    // What the payout list asks before disabling its sync button: a crashed
+    // run must not hold the trigger down until the next poll supersedes it.
+    expect(
+      engine.liveRun([crashed, { id: "done", status: "completed", heartbeatAt: now }], now),
+    ).toBeNull();
+    expect(engine.liveRun([crashed, beating], now)?.id).toBe("beating");
+  });
+
   it("does not resurrect a run that lost its slot to a claimant", async () => {
     const engine = await freshEngine();
     const runId = await claimOrThrow(engine, "manual");

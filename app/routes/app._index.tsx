@@ -6,7 +6,7 @@ import { Banner, BlockStack, Card, EmptyState, Page, Text } from "@shopify/polar
 import db from "~/db.server";
 import { apiError, newRequestId } from "~/lib/errors";
 import { logger } from "~/lib/logger.server";
-import { startRun } from "~/sync/run.server";
+import { liveRun, startRun } from "~/sync/run.server";
 import { adminExecutor } from "~/sync/throttle.server";
 import { authenticate } from "~/shopify.server";
 
@@ -18,8 +18,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     take: 5,
   });
 
+  // A run left `running` by a crashed process is not in progress, and must not
+  // sit on the manual trigger until the next poll supersedes it.
   return json({
-    activeRun: runs.find((run) => run.status === "running") ?? null,
+    activeRun: liveRun(runs),
     lastRun: runs.find((run) => run.status !== "running") ?? null,
   });
 }
