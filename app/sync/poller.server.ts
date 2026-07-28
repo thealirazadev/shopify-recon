@@ -48,13 +48,15 @@ export function requestSync(shop: string): void {
 }
 
 async function beginRun(shop: string, trigger: SyncTrigger): Promise<void> {
+  // Recorded before the attempt, not after it: a refused claim, a revoked
+  // token, or any other failure has to back the shop off to the poll interval
+  // as well, or a shop the app can no longer authenticate for is retried on
+  // every tick forever.
+  state.lastStartedAt.set(shop, Date.now());
+
   try {
     const { admin } = await unauthenticated.admin(shop);
     const runId = await startRun(adminExecutor(admin), shop, trigger);
-
-    // Recorded even when the claim is refused, so a busy shop is not retried
-    // on every tick.
-    state.lastStartedAt.set(shop, Date.now());
 
     if (!runId) {
       logger.info("sync.trigger_skipped", { shop, trigger });
@@ -68,7 +70,8 @@ async function beginRun(shop: string, trigger: SyncTrigger): Promise<void> {
   }
 }
 
-async function tick(): Promise<void> {
+/** One pass: the shops a webhook asked for, then every shop that is due. */
+export async function tick(): Promise<void> {
   const requested = [...state.pending];
 
   state.pending.clear();
