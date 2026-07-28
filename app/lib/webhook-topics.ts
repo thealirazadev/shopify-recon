@@ -7,6 +7,7 @@ export type WebhookAction =
   | "acknowledge-data-request"
   | "acknowledge-customer-redact"
   | "shop-redact"
+  | "sync-trigger"
   | "unhandled";
 
 const TOPIC_ACTIONS: Record<string, WebhookAction> = {
@@ -18,5 +19,18 @@ const TOPIC_ACTIONS: Record<string, WebhookAction> = {
 };
 
 export function actionForTopic(topic: string): WebhookAction {
-  return TOPIC_ACTIONS[topic] ?? "unhandled";
+  const known = TOPIC_ACTIONS[topic];
+
+  if (known) {
+    return known;
+  }
+
+  // Payout topic names vary by API version, so any delivered topic naming
+  // payouts is treated as a freshness hint rather than pinning one spelling.
+  // Nothing depends on it: the poller alone guarantees convergence.
+  if (/payout/i.test(topic)) {
+    return "sync-trigger";
+  }
+
+  return "unhandled";
 }

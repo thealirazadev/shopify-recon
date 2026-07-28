@@ -8,8 +8,12 @@ import { renderToPipeableStream } from "react-dom/server";
 
 import { logger } from "./lib/logger.server";
 import { addDocumentResponseHeaders } from "./shopify.server";
+import { startPoller } from "./sync/poller.server";
 
 export const streamTimeout = 5000;
+
+// One interval per process, started as the server module loads.
+startPoller();
 
 export default async function handleRequest(
   request: Request,

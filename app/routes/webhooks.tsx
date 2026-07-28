@@ -3,6 +3,7 @@ import type { ActionFunctionArgs } from "@remix-run/node";
 import db from "~/db.server";
 import { logger } from "~/lib/logger.server";
 import { actionForTopic } from "~/lib/webhook-topics";
+import { requestSync } from "~/sync/poller.server";
 import { authenticate } from "~/shopify.server";
 
 // Single endpoint for every registered topic. authenticate.webhook verifies
@@ -48,6 +49,14 @@ export async function action({ request }: ActionFunctionArgs) {
           await db.session.updateMany({ where: { shop }, data: { scope: scopes.join(",") } });
         }
 
+        break;
+      }
+
+      case "sync-trigger": {
+        // Fast and side-effect-light by design: record the trigger and answer
+        // 200. The poller starts the run within seconds.
+        requestSync(shop);
+        logger.info("webhook.sync_requested", { shop, topic });
         break;
       }
 
