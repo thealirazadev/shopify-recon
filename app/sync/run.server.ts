@@ -98,20 +98,35 @@ export async function heartbeat(runId: string, now: Date = new Date()): Promise<
   }
 }
 
+/**
+ * Records the terminal success state, but only while this run still owns the
+ * shop's slot. A run that lost the slot to a claimant (its heartbeat went
+ * stale, so another trigger superseded it) must not overwrite that verdict
+ * when it eventually finishes: the supersede is what stopped it being counted.
+ */
 export async function completeRun(
   shop: string,
   runId: string,
   counters: SyncCounters,
 ): Promise<void> {
-  await db.syncRun.update({
-    where: { id: runId },
+  const { count } = await db.syncRun.updateMany({
+    where: { id: runId, status: "running" },
     data: { status: "completed", finishedAt: new Date(), ...counters },
   });
+
+  if (count === 0) {
+    logger.warn("sync.finish_ignored", { shop, runId, outcome: "completed" });
+
+    return;
+  }
 
   logger.info("sync.completed", { shop, runId, ...counters });
 }
 
-/** Records the terminal failure state. Never throws: the caller already has one error. */
+/**
+ * Records the terminal failure state, scoped to a still-running row for the
+ * same reason completeRun is. Never throws: the caller already has one error.
+ */
 export async function failRun(
   shop: string,
   runId: string,
@@ -123,8 +138,8 @@ export async function failRun(
   logger.error("sync.failed", { shop, runId, error: message, ...counters });
 
   try {
-    await db.syncRun.update({
-      where: { id: runId },
+    const { count } = await db.syncRun.updateMany({
+      where: { id: runId, status: "running" },
       data: {
         status: "failed",
         error: message.slice(0, 500),
@@ -132,6 +147,10 @@ export async function failRun(
         ...counters,
       },
     });
+
+    if (count === 0) {
+      logger.warn("sync.finish_ignored", { shop, runId, outcome: "failed" });
+    }
   } catch (writeError) {
     logger.error("sync.status_write_failed", {
       shop,

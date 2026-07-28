@@ -666,6 +666,36 @@ describe("run claims", () => {
     expect(runId).not.toBe(stale.id);
   });
 
+  it("does not resurrect a run that lost its slot to a claimant", async () => {
+    const engine = await freshEngine();
+    const runId = await claimOrThrow(engine, "manual");
+
+    // What claimRun does to a run whose heartbeat went stale while its process
+    // was still alive.
+    await db.syncRun.update({
+      where: { id: runId },
+      data: {
+        status: "superseded",
+        error: "Superseded after a stale heartbeat",
+        finishedAt: new Date(),
+      },
+    });
+
+    await engine.completeRun(SHOP, runId, { payoutsSeen: 7, transactionsSeen: 7, ordersSeen: 7 });
+
+    const afterComplete = await db.syncRun.findUniqueOrThrow({ where: { id: runId } });
+
+    expect(afterComplete.status).toBe("superseded");
+    expect(afterComplete.payoutsSeen).toBe(0);
+
+    await engine.failRun(SHOP, runId, engine.newCounters(), new Error("connection reset by peer"));
+
+    const afterFail = await db.syncRun.findUniqueOrThrow({ where: { id: runId } });
+
+    expect(afterFail.status).toBe("superseded");
+    expect(afterFail.error).toBe("Superseded after a stale heartbeat");
+  });
+
   it("keeps a live run and refuses the second claim", async () => {
     const engine = await freshEngine();
 
