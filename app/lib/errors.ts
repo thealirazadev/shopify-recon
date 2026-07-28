@@ -23,3 +23,20 @@ export function newRequestId(): string {
 export function apiError(code: ErrorCode, message: string, requestId: string): ApiErrorBody {
   return { error: { code, message, requestId } };
 }
+
+/**
+ * A Shopify Admin API call that could not be completed. `retryable` marks the
+ * transport-level failures (network, unreadable body) the client retries once
+ * before giving up; a rejected query is never retried blindly.
+ */
+export class UpstreamError extends Error {
+  readonly code: ErrorCode = "UPSTREAM_ERROR";
+
+  constructor(
+    message: string,
+    readonly retryable = false,
+  ) {
+    super(message);
+    this.name = "UpstreamError";
+  }
+}

@@ -7,6 +7,7 @@ import { AppProvider } from "@shopify/shopify-app-remix/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 
 import { ensureShopSettings } from "~/lib/shop.server";
+import { adminExecutor, createThrottledClient } from "~/sync/throttle.server";
 import { authenticate } from "~/shopify.server";
 
 // Every embedded route under app.* authenticates via authenticate.admin,
@@ -14,7 +15,7 @@ import { authenticate } from "~/shopify.server";
 export async function loader({ request }: LoaderFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
 
-  await ensureShopSettings(admin, session.shop);
+  await ensureShopSettings(createThrottledClient(adminExecutor(admin), session.shop), session.shop);
 
   return json({ apiKey: process.env.SHOPIFY_API_KEY ?? "" });
 }

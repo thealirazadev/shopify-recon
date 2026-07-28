@@ -1,17 +1,14 @@
-import type { AdminApiContext } from "@shopify/shopify-app-remix/server";
-
 import db from "~/db.server";
 import { InvalidTimeZoneError, payoutDate } from "~/lib/dates";
+import { UpstreamError } from "~/lib/errors";
 import { logger } from "~/lib/logger.server";
 import { currencyExponent, UnknownCurrencyError } from "~/lib/money";
+import type { ThrottledClient } from "~/sync/throttle.server";
 
-// Reads the shop's payout currency and IANA timezone once, on the first
-// authenticated load, and stores them on Shop. Both are needed before any
-// amount can be parsed or any payout date derived, so they are fetched
-// before the sync engine exists.
-//
-// Phase 2 moves this call behind the cost-aware client in
-// sync/throttle.server.ts, which is where every Admin API call belongs.
+// The shop's payout currency and IANA timezone gate everything else: no
+// amount can be parsed and no payout date derived without them. They are read
+// once on the first authenticated load and re-checked at the start of every
+// sync run, both through the throttled client that owns the Admin API path.
 
 const SHOP_INFO_QUERY = `#graphql
   query ShopInfo {
@@ -22,106 +19,109 @@ const SHOP_INFO_QUERY = `#graphql
     }
   }`;
 
-interface ShopInfoResponse {
-  data?: {
-    shop?: {
-      myshopifyDomain?: string;
-      ianaTimezone?: string;
-      currencyCode?: string;
-    };
+interface ShopInfoData {
+  shop?: {
+    myshopifyDomain?: string;
+    ianaTimezone?: string;
+    currencyCode?: string;
   };
-  errors?: unknown;
+}
+
+export interface ShopIdentity {
+  currency: string;
+  ianaTimezone: string;
 }
 
 /**
- * Ensures a Shop row exists for this shop. Re-entry is a no-op: once the row
- * exists nothing is fetched and nothing is written, so an existing shop's
- * settings are never overwritten by a page load. A failure here is logged and
- * swallowed; the next authenticated load retries.
+ * Reads the shop's currency and timezone from Shopify and refuses anything
+ * this app cannot compute with: an unknown currency exponent or an unusable
+ * timezone would silently corrupt every later amount and payout date.
  */
-export async function ensureShopSettings(admin: AdminApiContext, shop: string): Promise<void> {
+async function fetchShopIdentity(client: ThrottledClient): Promise<ShopIdentity> {
+  const data = await client.request<ShopInfoData>("ShopInfo", SHOP_INFO_QUERY);
+  const currency = data.shop?.currencyCode;
+  const ianaTimezone = data.shop?.ianaTimezone;
+
+  if (!currency || !ianaTimezone) {
+    throw new UpstreamError("ShopInfo returned no currency or timezone");
+  }
+
+  try {
+    currencyExponent(currency);
+    payoutDate(new Date(0), ianaTimezone);
+  } catch (error) {
+    if (error instanceof UnknownCurrencyError || error instanceof InvalidTimeZoneError) {
+      throw new UpstreamError(`Unusable shop settings: ${error.message}`);
+    }
+
+    throw error;
+  }
+
+  return { currency, ianaTimezone };
+}
+
+/**
+ * Ensures a Shop row exists. Re-entry is a no-op: once the row exists nothing
+ * is fetched and nothing is written, so a page load never overwrites settings.
+ * A failure here is logged and swallowed so a transient Admin API error cannot
+ * block the embedded shell; the next authenticated load retries.
+ */
+export async function ensureShopSettings(client: ThrottledClient, shop: string): Promise<void> {
   try {
     const existing = await db.shop.findUnique({ where: { shop }, select: { id: true } });
 
     if (existing) {
       return;
     }
-  } catch (error) {
-    logger.error("shop.bootstrap_failed", {
-      shop,
-      stage: "read",
-      error: error instanceof Error ? error.message : String(error),
-    });
 
-    return;
-  }
+    const identity = await fetchShopIdentity(client);
 
-  let body: ShopInfoResponse;
-
-  try {
-    const response = await admin.graphql(SHOP_INFO_QUERY);
-    body = (await response.json()) as ShopInfoResponse;
-  } catch (error) {
-    logger.error("shop.bootstrap_failed", {
-      shop,
-      stage: "fetch",
-      error: error instanceof Error ? error.message : String(error),
-    });
-
-    return;
-  }
-
-  const info = body.data?.shop;
-
-  if (body.errors || !info?.currencyCode || !info.ianaTimezone) {
-    logger.error("shop.bootstrap_failed", {
-      shop,
-      stage: "fetch",
-      error: "ShopInfo returned no currency or timezone",
-    });
-
-    return;
-  }
-
-  // Store nothing we cannot compute with: a currency with no known exponent
-  // or an unusable timezone would silently corrupt every later amount and
-  // payout date.
-  try {
-    currencyExponent(info.currencyCode);
-    payoutDate(new Date(0), info.ianaTimezone);
-  } catch (error) {
-    if (error instanceof UnknownCurrencyError || error instanceof InvalidTimeZoneError) {
-      logger.error("shop.bootstrap_failed", {
-        shop,
-        stage: "validate",
-        currency: info.currencyCode,
-        ianaTimezone: info.ianaTimezone,
-        error: error.message,
-      });
-
-      return;
-    }
-
-    throw error;
-  }
-
-  try {
     await db.shop.upsert({
       where: { shop },
-      create: { shop, currency: info.currencyCode, ianaTimezone: info.ianaTimezone },
+      create: { shop, currency: identity.currency, ianaTimezone: identity.ianaTimezone },
       update: {},
     });
 
-    logger.info("shop.bootstrapped", {
-      shop,
-      currency: info.currencyCode,
-      ianaTimezone: info.ianaTimezone,
-    });
+    logger.info("shop.bootstrapped", { shop, ...identity });
   } catch (error) {
     logger.error("shop.bootstrap_failed", {
       shop,
-      stage: "write",
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+/**
+ * Shop settings for a sync run, re-checked against Shopify first. A currency
+ * or timezone change is logged loudly: stored payoutDate values were derived
+ * in the old zone and only a full re-sync recomputes them. Unlike the
+ * bootstrap path this throws, because a run that cannot read the shop's
+ * currency must fail rather than guess.
+ */
+export async function loadShopSettings(client: ThrottledClient, shop: string) {
+  const identity = await fetchShopIdentity(client);
+  const existing = await db.shop.findUnique({ where: { shop } });
+
+  if (!existing) {
+    return db.shop.create({
+      data: { shop, currency: identity.currency, ianaTimezone: identity.ianaTimezone },
+    });
+  }
+
+  if (existing.currency === identity.currency && existing.ianaTimezone === identity.ianaTimezone) {
+    return existing;
+  }
+
+  logger.warn("shop.settings_changed", {
+    shop,
+    fromCurrency: existing.currency,
+    toCurrency: identity.currency,
+    fromTimezone: existing.ianaTimezone,
+    toTimezone: identity.ianaTimezone,
+  });
+
+  return db.shop.update({
+    where: { shop },
+    data: { currency: identity.currency, ianaTimezone: identity.ianaTimezone },
+  });
 }
