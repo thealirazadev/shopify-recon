@@ -26,3 +26,196 @@ model Session {
   collaborator  Boolean?  @default(false)
   emailVerified Boolean?  @default(false)
 }
+
+// SQLite has no Prisma enums, so every status/type field below is a string
+// whose allowed values are enforced in app/lib and listed in
+// docs/architecture.md. All *Minor columns are integer minor units (BigInt);
+// no float ever touches the money path.
+
+// Per-shop settings plus the payout currency and IANA timezone read from
+// Shopify on first authenticated load. The only human-edited rows besides
+// Discrepancy.
+model Shop {
+  id              String   @id @default(cuid())
+  shop            String   @unique
+  currency        String
+  ianaTimezone    String
+  feePercentBps   Int      @default(290)
+  feeFixedMinor   Int      @default(30)
+  feeToleranceBps Int      @default(50)
+  agingWindowDays Int      @default(7)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Resumable sync position per resource: newest processed issuedAt for
+// payouts, the updated_at horizon for orders.
+model SyncCursor {
+  id        String    @id @default(cuid())
+  shop      String
+  resource  String // payouts | orders
+  watermark DateTime?
+  updatedAt DateTime  @updatedAt
+
+  @@unique([shop, resource])
+}
+
+// One sync attempt. The claim transaction plus heartbeatAt is the only lock
+// keeping a single run per shop.
+model SyncRun {
+  id               String    @id @default(cuid())
+  shop             String
+  trigger          String // webhook | poll | manual
+  status           String // running | completed | failed | superseded
+  error            String?
+  payoutsSeen      Int       @default(0)
+  transactionsSeen Int       @default(0)
+  ordersSeen       Int       @default(0)
+  startedAt        DateTime  @default(now())
+  heartbeatAt      DateTime  @default(now())
+  finishedAt       DateTime?
+
+  @@index([shop, status])
+  @@index([shop, startedAt])
+}
+
+// A Shopify Payments payout. netMinor is the amount Shopify reports having
+// deposited; the computed* columns are the rollup of this payout's balance
+// transactions and are derived state, recomputed on every recon pass.
+model Payout {
+  id                       String               @id @default(cuid())
+  shop                     String
+  shopifyGid               String
+  legacyId                 String
+  status                   String // scheduled | in_transit | paid | failed | canceled
+  currency                 String
+  netMinor                 BigInt
+  issuedAt                 DateTime
+  payoutDate               String // YYYY-MM-DD in the shop timezone
+  summaryJson              String
+  computedGrossMinor       BigInt?
+  computedFeesMinor        BigInt?
+  computedRefundsMinor     BigInt?
+  computedAdjustmentsMinor BigInt?
+  computedNetMinor         BigInt?
+  varianceMinor            BigInt?
+  reconStatus              String               @default("pending") // pending | reconciled | variance
+  transactionsSyncedAt     DateTime?
+  reconciledAt             DateTime?
+  createdAt                DateTime             @default(now())
+  updatedAt                DateTime             @updatedAt
+  transactions             BalanceTransaction[]
+
+  @@unique([shop, shopifyGid])
+  @@index([shop, payoutDate])
+  @@index([shop, reconStatus])
+  @@index([shop, status])
+}
+
+// One line of a payout. match* columns are derived state written only by the
+// recon pass; operator input never lands here.
+model BalanceTransaction {
+  id                       String   @id @default(cuid())
+  shop                     String
+  shopifyGid               String
+  payoutId                 String
+  payout                   Payout   @relation(fields: [payoutId], references: [id])
+  type                     String // charge | refund | adjustment | dispute | others verbatim
+  currency                 String
+  transactionDate          DateTime
+  amountMinor              BigInt
+  feeMinor                 BigInt
+  netMinor                 BigInt
+  sourceType               String?
+  sourceId                 String?
+  sourceOrderTransactionId String?
+  associatedOrderGid       String?
+  matchState               String   @default("unmatched") // matched | partial | unmatched
+  matchTargetType          String? // order_transaction | refund | adjustment
+  matchTargetId            String?
+  matchReason              String? // source_missing | amount_mismatch | currency_mismatch | no_source
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@unique([shop, shopifyGid])
+  @@index([shop, payoutId])
+  @@index([shop, matchState])
+}
+
+model Order {
+  id               String             @id @default(cuid())
+  shop             String
+  shopifyGid       String
+  name             String
+  currency         String
+  totalMinor       BigInt
+  financialStatus  String?
+  processedAt      DateTime
+  shopifyUpdatedAt DateTime
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  transactions     OrderTransaction[]
+  refunds          Refund[]
+
+  @@unique([shop, shopifyGid])
+  @@index([shop, processedAt])
+}
+
+// The join target for charge and refund balance transactions, via
+// BalanceTransaction.sourceOrderTransactionId -> shopifyGid.
+model OrderTransaction {
+  id          String   @id @default(cuid())
+  shop        String
+  shopifyGid  String
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id])
+  kind        String // sale | capture | refund | void | authorization
+  status      String // success | failure | pending | error
+  gateway     String
+  amountMinor BigInt
+  currency    String
+  processedAt DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([shop, shopifyGid])
+  @@index([orderId])
+  @@index([shop, gateway, processedAt])
+}
+
+model Refund {
+  id          String   @id @default(cuid())
+  shop        String
+  shopifyGid  String
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id])
+  amountMinor BigInt
+  currency    String
+  processedAt DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([shop, shopifyGid])
+  @@index([orderId])
+}
+
+// Identity is (shop, type, subjectType, subjectId) so detection can upsert
+// idempotently. status and note are the only operator-owned fields in the
+// recon data model.
+model Discrepancy {
+  id          String    @id @default(cuid())
+  shop        String
+  type        String // payout_variance | unmatched_transaction | missing_from_payout | fee_anomaly | currency_mismatch
+  subjectType String // payout | balance_transaction | order_transaction
+  subjectId   String
+  status      String    @default("open") // open | resolved | auto_resolved
+  detailJson  String
+  note        String?
+  firstSeenAt DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  resolvedAt  DateTime?
+
+  @@unique([shop, type, subjectType, subjectId])
+  @@index([shop, status])
+  @@index([shop, type])
+}
