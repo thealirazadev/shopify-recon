@@ -216,7 +216,24 @@ const ORDER_5999 = {
 };
 
 type Variables = Record<string, unknown>;
-type Handler = (variables: Variables) => unknown;
+type Handler = (variables: Variables, query: string) => unknown;
+
+/**
+ * A fixture reduced to the fields its document actually selects. Shopify never
+ * returns a field the query did not ask for, so neither does the stub: a query
+ * that forgets a column must not be rescued by a generous fixture.
+ */
+function selectedFields(node: Record<string, unknown>, query: string): Record<string, unknown> {
+  if (query.includes("summary")) {
+    return node;
+  }
+
+  const projected = { ...node };
+
+  delete projected.summary;
+
+  return projected;
+}
 
 function transactionsPage(nodes: unknown[], endCursor: string | null = null) {
   return ok({
@@ -246,8 +263,13 @@ function makeStub(overrides: Record<string, Handler> = {}) {
           },
         },
       }),
-    PayoutById: (variables) =>
-      ok({ node: variables.id === PAYOUT_IN_TRANSIT.id ? PAYOUT_IN_TRANSIT : PAYOUT_PAID }),
+    PayoutById: (variables, query) =>
+      ok({
+        node: selectedFields(
+          variables.id === PAYOUT_IN_TRANSIT.id ? PAYOUT_IN_TRANSIT : PAYOUT_PAID,
+          query,
+        ),
+      }),
     PayoutTransactionsPage: (variables) =>
       payoutIdOf(variables) === "9001"
         ? transactionsPage([CHARGE_9001, REFUND_9001])
@@ -274,7 +296,7 @@ function makeStub(overrides: Record<string, Handler> = {}) {
       throw new Error(`no stub for operation ${operation}`);
     }
 
-    return handler(variables);
+    return handler(variables, query);
   };
 
   return { execute, calls };
@@ -375,6 +397,26 @@ describe("sync engine", () => {
       ["orders", "2026-07-23T16:05:00.000Z"],
       ["payouts", "2026-07-25T13:00:00.000Z"],
     ]);
+  });
+
+  it("keeps the stored summary when a non-terminal payout is refreshed", async () => {
+    const engine = await freshEngine();
+
+    await engine.executeRun(makeStub().execute, SHOP, await claimOrThrow(engine, "manual"), {
+      sleep: noSleep,
+    });
+
+    const refreshed = await db.payout.findFirstOrThrow({
+      where: { shop: SHOP, shopifyGid: PAYOUT_IN_TRANSIT.id },
+    });
+
+    // The in-transit payout is re-read by node lookup in the same run. That
+    // lookup must carry the summary, or the refresh blanks a column the
+    // payouts page already filled in.
+    expect(JSON.parse(refreshed.summaryJson)).toStrictEqual({
+      chargesGross: "20600",
+      chargesFee: "600",
+    });
   });
 
   it("changes nothing when the same fixtures are synced twice", async () => {

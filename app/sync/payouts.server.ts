@@ -38,24 +38,29 @@ const KNOWN_TRANSACTION_TYPES = [
   "transfer",
 ];
 
+// One selection for both payout documents: every column payoutFields maps has
+// to be present in each of them, or a refresh would blank what the page pass
+// stored.
+const PAYOUT_NODE_FIELDS = `
+  id
+  issuedAt
+  status
+  net { amount currencyCode }
+  summary {
+    chargesGross { amount currencyCode }
+    chargesFee { amount currencyCode }
+    refundsGross { amount currencyCode }
+    refundsFee { amount currencyCode }
+    adjustmentsGross { amount currencyCode }
+    adjustmentsFee { amount currencyCode }
+  }`;
+
 const PAYOUTS_PAGE_QUERY = `#graphql
   query PayoutsPage($first: Int!, $after: String) {
     shopifyPaymentsAccount {
       payouts(first: $first, after: $after, reverse: true) {
         edges {
-          node {
-            id
-            issuedAt
-            status
-            net { amount currencyCode }
-            summary {
-              chargesGross { amount currencyCode }
-              chargesFee { amount currencyCode }
-              refundsGross { amount currencyCode }
-              refundsFee { amount currencyCode }
-              adjustmentsGross { amount currencyCode }
-              adjustmentsFee { amount currencyCode }
-            }
+          node {${PAYOUT_NODE_FIELDS}
           }
         }
         pageInfo { hasNextPage endCursor }
@@ -66,11 +71,7 @@ const PAYOUTS_PAGE_QUERY = `#graphql
 const PAYOUT_BY_ID_QUERY = `#graphql
   query PayoutById($id: ID!) {
     node(id: $id) {
-      ... on ShopifyPaymentsPayout {
-        id
-        issuedAt
-        status
-        net { amount currencyCode }
+      ... on ShopifyPaymentsPayout {${PAYOUT_NODE_FIELDS}
       }
     }
   }`;
