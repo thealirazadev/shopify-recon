@@ -17,6 +17,8 @@ import { parseMoney } from "~/lib/money";
 
 export const PAYOUT_PAGE_SIZE = 50;
 
+export const TRANSACTION_PAGE_SIZE = 250;
+
 /** How far back past the watermark a run re-reads payouts. */
 export const PAYOUT_OVERLAP_MS = 3 * 24 * 60 * 60 * 1000;
 
@@ -24,6 +26,17 @@ export const PAYOUT_OVERLAP_MS = 3 * 24 * 60 * 60 * 1000;
 export const NON_TERMINAL_REFRESH_LIMIT = 200;
 
 const TERMINAL_STATUSES = ["paid", "failed", "canceled"];
+
+// Anything outside this list is stored verbatim and logged; the matcher
+// categorizes it as an adjustment. An unfamiliar type is never a crash.
+const KNOWN_TRANSACTION_TYPES = [
+  "charge",
+  "refund",
+  "adjustment",
+  "dispute",
+  "reserve",
+  "transfer",
+];
 
 const PAYOUTS_PAGE_QUERY = `#graphql
   query PayoutsPage($first: Int!, $after: String) {
@@ -62,6 +75,30 @@ const PAYOUT_BY_ID_QUERY = `#graphql
     }
   }`;
 
+const PAYOUT_TRANSACTIONS_QUERY = `#graphql
+  query PayoutTransactionsPage($first: Int!, $after: String, $query: String) {
+    shopifyPaymentsAccount {
+      balanceTransactions(first: $first, after: $after, query: $query) {
+        edges {
+          node {
+            id
+            type
+            transactionDate
+            amount { amount currencyCode }
+            fee { amount currencyCode }
+            net { amount currencyCode }
+            sourceId
+            sourceType
+            sourceOrderTransactionId
+            associatedOrder { id name }
+            associatedPayout { id status }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }`;
+
 export interface MoneyV2 {
   amount: string;
   currencyCode: string;
@@ -88,6 +125,42 @@ interface PayoutByIdData {
   node?: (Partial<PayoutNode> & { id?: string }) | null;
 }
 
+interface BalanceTransactionNode {
+  id: string;
+  type?: string | null;
+  transactionDate: string;
+  amount: MoneyV2;
+  fee?: MoneyV2 | null;
+  net: MoneyV2;
+  sourceId?: string | number | null;
+  sourceType?: string | null;
+  sourceOrderTransactionId?: string | number | null;
+  associatedOrder?: { id: string; name?: string } | null;
+}
+
+interface TransactionsPageData {
+  shopifyPaymentsAccount?: {
+    balanceTransactions: {
+      edges: { node: BalanceTransactionNode }[];
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    };
+  } | null;
+}
+
+interface BalanceTransactionFields {
+  payoutId: string;
+  type: string;
+  currency: string;
+  transactionDate: Date;
+  amountMinor: bigint;
+  feeMinor: bigint;
+  netMinor: bigint;
+  sourceType: string | null;
+  sourceId: string | null;
+  sourceOrderTransactionId: string | null;
+  associatedOrderGid: string | null;
+}
+
 interface PayoutFields {
   legacyId: string;
   status: string;
@@ -112,7 +185,7 @@ function instantOf(value: string, gid: string, field: string): Date {
   const instant = new Date(value);
 
   if (Number.isNaN(instant.getTime())) {
-    throw new UpstreamError(`Payout ${gid} has an unreadable ${field}`);
+    throw new UpstreamError(`${gid} has an unreadable ${field}`);
   }
 
   return instant;
@@ -214,6 +287,162 @@ async function commitPayoutPage(
   });
 }
 
+/**
+ * Shopify reports the source order transaction as a legacy numeric id; the
+ * mirror joins on OrderTransaction.shopifyGid, so it is promoted to a gid
+ * here, at the edge, and stored ready to join.
+ */
+function orderTransactionGid(value: string | number | null | undefined): string | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const raw = String(value);
+
+  return /^\d+$/.test(raw) ? `gid://shopify/OrderTransaction/${raw}` : raw;
+}
+
+function transactionFields(
+  ctx: SyncContext,
+  node: BalanceTransactionNode,
+  payoutId: string,
+): BalanceTransactionFields {
+  const currency = node.amount.currencyCode;
+  const type = String(node.type ?? "adjustment").toLowerCase();
+
+  if (!KNOWN_TRANSACTION_TYPES.includes(type)) {
+    logger.warn("sync.unknown_type", {
+      shop: ctx.shop,
+      runId: ctx.runId,
+      type,
+      transaction: node.id,
+    });
+  }
+
+  return {
+    payoutId,
+    type,
+    currency,
+    transactionDate: instantOf(node.transactionDate, node.id, "transactionDate"),
+    amountMinor: parseMoney(node.amount.amount, currency),
+    feeMinor: node.fee ? parseMoney(node.fee.amount, node.fee.currencyCode) : 0n,
+    netMinor: parseMoney(node.net.amount, node.net.currencyCode),
+    sourceType: node.sourceType ? String(node.sourceType).toLowerCase() : null,
+    sourceId: node.sourceId === null || node.sourceId === undefined ? null : String(node.sourceId),
+    sourceOrderTransactionId: orderTransactionGid(node.sourceOrderTransactionId),
+    associatedOrderGid: node.associatedOrder?.id ?? null,
+  };
+}
+
+/** Writes one balance transaction. Never touches the derived match columns. */
+async function upsertBalanceTransaction(
+  tx: Prisma.TransactionClient,
+  ctx: SyncContext,
+  node: BalanceTransactionNode,
+  payoutId: string,
+): Promise<void> {
+  const fields = transactionFields(ctx, node, payoutId);
+  const where = { shop_shopifyGid: { shop: ctx.shop, shopifyGid: node.id } };
+  const existing = await tx.balanceTransaction.findUnique({ where });
+
+  if (!existing) {
+    await tx.balanceTransaction.create({
+      data: { shop: ctx.shop, shopifyGid: node.id, ...fields },
+    });
+
+    return;
+  }
+
+  if (isUnchanged(existing, fields)) {
+    return;
+  }
+
+  await tx.balanceTransaction.update({ where: { id: existing.id }, data: fields });
+}
+
+/**
+ * Pages one payout's balance transactions. transactionsSyncedAt is stamped in
+ * the same transaction as the final page and only while it is still null, so a
+ * crash mid-payout leaves it null and the next run refetches from page one,
+ * and a re-run over an already complete payout writes nothing at all.
+ */
+async function syncTransactionsFor(
+  ctx: SyncContext,
+  payout: { id: string; legacyId: string; shopifyGid: string; transactionsSyncedAt: Date | null },
+): Promise<void> {
+  let after: string | null = null;
+
+  for (;;) {
+    const data: TransactionsPageData = await ctx.client.request<TransactionsPageData>(
+      "PayoutTransactionsPage",
+      PAYOUT_TRANSACTIONS_QUERY,
+      { first: TRANSACTION_PAGE_SIZE, after, query: `payout_id:${payout.legacyId}` },
+    );
+    const connection = data.shopifyPaymentsAccount?.balanceTransactions;
+
+    if (!connection) {
+      logger.warn("sync.payouts_unavailable", { shop: ctx.shop, runId: ctx.runId });
+
+      return;
+    }
+
+    const nodes = connection.edges.map((edge) => edge.node);
+    const endCursor = connection.pageInfo.endCursor;
+    const isLastPage = !connection.pageInfo.hasNextPage || !endCursor;
+
+    await db.$transaction(async (tx) => {
+      for (const node of nodes) {
+        await upsertBalanceTransaction(tx, ctx, node, payout.id);
+      }
+
+      if (isLastPage && payout.transactionsSyncedAt === null) {
+        await tx.payout.update({
+          where: { id: payout.id },
+          data: { transactionsSyncedAt: new Date() },
+        });
+      }
+    });
+
+    ctx.counters.transactionsSeen += nodes.length;
+
+    logger.info("sync.page_committed", {
+      shop: ctx.shop,
+      runId: ctx.runId,
+      resource: "balance_transactions",
+      payout: payout.shopifyGid,
+      rows: nodes.length,
+      complete: isLastPage,
+    });
+
+    await ctx.heartbeat();
+
+    if (isLastPage) {
+      return;
+    }
+
+    after = endCursor;
+  }
+}
+
+/**
+ * Fetches transactions for every payout that is incomplete locally or has not
+ * settled yet. A settled, fully stamped payout is never refetched.
+ */
+async function syncPayoutTransactions(ctx: SyncContext): Promise<void> {
+  const targets = await db.payout.findMany({
+    where: {
+      shop: ctx.shop,
+      OR: [{ transactionsSyncedAt: null }, { status: { notIn: TERMINAL_STATUSES } }],
+    },
+    orderBy: { issuedAt: "desc" },
+    select: { id: true, legacyId: true, shopifyGid: true, transactionsSyncedAt: true },
+  });
+
+  for (const payout of targets) {
+    await syncTransactionsFor(ctx, payout);
+  }
+}
+
 /** Re-reads payouts that have not reached a terminal status yet. */
 async function refreshNonTerminalPayouts(ctx: SyncContext): Promise<void> {
   const pending = await db.payout.findMany({
@@ -309,4 +538,5 @@ export async function syncPayouts(ctx: SyncContext): Promise<void> {
   }
 
   await refreshNonTerminalPayouts(ctx);
+  await syncPayoutTransactions(ctx);
 }
