@@ -8,10 +8,7 @@ export interface TransactionMatch {
   readonly reason: string;
 }
 
-export function matchTransaction(
-  balanceId: string,
-  orderIds: string[]
-): TransactionMatch {
+export function matchTransaction(balanceId: string, orderIds: string[]): TransactionMatch {
   // Stub: to be implemented in Phase 3
   return {
     balanceTransactionId: balanceId,

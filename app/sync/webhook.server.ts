@@ -7,15 +7,11 @@ export interface WebhookEvent {
   readonly data: Record<string, unknown>;
 }
 
-export async function handleReconWebhook(event: WebhookEvent): Promise<void> {
+export async function handleReconWebhook(_event: WebhookEvent): Promise<void> {
   // Stub: to be implemented in Phase 3
-  console.log("Webhook received:", event.topic);
 }
 
-export function validateWebhookSignature(
-  signature: string,
-  body: string
-): boolean {
+export function validateWebhookSignature(signature: string, body: string): boolean {
   // Stub: to be implemented in Phase 3
   return false;
 }
