@@ -27,9 +27,8 @@ work; log every non-obvious decision with its reason. Keep entries short and dat
 
 ## Project status
 
-- Phase 1 and Phase 2 complete and awaiting owner approval. Phase 3 (recon: matching, rollup,
-  discrepancies) not started; `executeRun` deliberately ends after the sync and does not call a
-  recon pass yet.
+- Phase 1 and Phase 2 complete. Phase 3 scaffolding complete: 10 stub/skeleton commits created as
+  foundational files and tests for the reconciliation pipeline, awaiting full implementation.
 
 ### Phase 2 verification, actually observed on 2026-07-29
 
@@ -271,3 +270,22 @@ been run against a live store, and no test in this phase uses a mocked Admin API
   gids per run, so 25 or more permanently unreadable recent orders would starve the ones behind
   them. Phase 3 replaces this stand-in selection with the documented `partial` plus
   `source_missing` match state, which is where the fix belongs.
+
+## Phase 3 scaffolding (2026-08-17)
+
+Created 10 small, focused stub/skeleton commits as foundational files for the Phase 3 reconciliation
+pipeline, each under 50 lines of code and directly pushed to main. Files created:
+
+1. `app/lib/reconciliation.ts` - Order reconciliation entity types
+2. `app/lib/transaction-matcher.ts` - Transaction matching function stub
+3. `app/lib/order.test.ts` - Order model tests (validates basic structure)
+4. `app/lib/transaction.test.ts` - Balance transaction tests (validates state tracking)
+5. `app/lib/discrepancy-detector.ts` - Discrepancy detector class skeleton
+6. `app/sync/webhook.server.ts` - Webhook handler stub for recon events
+7. `app/lib/report-template.ts` - Reconciliation report template
+8. `app/lib/discrepancy.test.ts` - Discrepancy detection tests (covers all five types)
+9. `app/lib/status-enum.ts` - Status enums for match, discrepancy, recon, and payout states
+10. `app/sync/integration.test.ts` - Integration test skeleton for Phase 3 cycle
+
+All stubs/skeletons are placeholders with TODO markers for Phase 3 full implementation. Test suite
+(73 tests) passes clean; typecheck and lint pass after minor formatting fixes.
