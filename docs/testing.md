@@ -67,10 +67,10 @@ npm run dev              # shopify app dev (tunnels to the dev store)
 
 ## CI plan
 
-GitHub Actions on push and pull request to `main`: Node 20, `npm ci`, `npm run typecheck`,
-`npm run lint`, `npm test`. The suite must not need Shopify credentials; anything requiring a
-real store stays in the manual checklists. CI is added when the repository goes public, running
-exactly the commands above, nothing more.
+GitHub Actions (`.github/workflows/ci.yml`) on push and pull request to `main`: Node 20,
+`npm ci`, `npx prisma generate`, `npm run typecheck`, `npm run lint`, `npm test`,
+`npm run build`. The suite must not need Shopify credentials; anything requiring a real store
+stays in the manual checklists.
 
 ## Definition of "done" for a feature
 
