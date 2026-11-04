@@ -17,7 +17,8 @@ reached a payout - go unseen because nothing is looking.
 
 ## Planned features
 
-All of the following is planned behavior; implementation has not started.
+The sync engine is implemented; the rest of the list below is planned behavior, delivered
+phase by phase (see Status).
 
 - Incremental sync of payouts, balance transactions, orders, and refunds with persisted
   cursors, cost-aware GraphQL throttling, and idempotent upserts keyed by Shopify GIDs (a
@@ -63,7 +64,27 @@ gateways other than Shopify Payments.
 | [docs/launch-checklist.md](docs/launch-checklist.md) | Pre-production verification |
 | [docs/memory.md](docs/memory.md) | Working log and decisions |
 
+## Development
+
+```bash
+npm install
+cp .env.example .env     # fill Shopify app credentials
+npx prisma migrate dev
+npm run dev              # shopify app dev (tunnels to the dev store)
+```
+
+Checks, also run by CI on every push and pull request to `main`:
+
+```bash
+npm run typecheck
+npm run lint
+npm test
+npm run build
+```
+
 ## Status
 
-Planning stage. This repository currently contains documentation only; implementation follows
-the phases in [docs/phases.md](docs/phases.md), one approved phase at a time.
+Phases 1 (foundation) and 2 (sync engine) are complete. Phase 3 is in progress: the pure
+matching, rollup, and discrepancy rule modules exist, but the recon pass that runs them after a
+sync does not yet. The dashboard and CSV export (phases 4 and 5) are not started. Implementation
+follows the phases in [docs/phases.md](docs/phases.md), one approved phase at a time.
