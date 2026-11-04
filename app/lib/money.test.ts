@@ -46,9 +46,19 @@ describe("parseMoney", () => {
     expect(parseMoney("-1", "JPY")).toBe(-1n);
   });
 
+  it("accepts zero digits past the exponent, as Shopify renders whole amounts", () => {
+    expect(parseMoney("1000.0", "JPY")).toBe(1000n);
+    expect(parseMoney("-25.00", "JPY")).toBe(-25n);
+    expect(parseMoney("10.0", "USD")).toBe(1000n);
+    expect(parseMoney("10.500", "USD")).toBe(1050n);
+    expect(parseMoney("1.2340", "BHD")).toBe(1234n);
+  });
+
   it("throws when the fraction is longer than the exponent", () => {
     expect(() => parseMoney("10.001", "USD")).toThrow(InvalidAmountError);
     expect(() => parseMoney("10.1", "JPY")).toThrow(InvalidAmountError);
+    expect(() => parseMoney("10.01", "JPY")).toThrow(InvalidAmountError);
+    expect(() => parseMoney("10.0010", "USD")).toThrow(InvalidAmountError);
     expect(() => parseMoney("1.2345", "BHD")).toThrow(InvalidAmountError);
   });
 

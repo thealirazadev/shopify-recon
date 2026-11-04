@@ -82,7 +82,9 @@ export function currencyExponent(currency: string): number {
 
 /**
  * Parse a Shopify decimal string into minor units. A fraction longer than the
- * currency's exponent throws rather than rounding.
+ * currency's exponent throws rather than rounding. Trailing zeros past the
+ * exponent carry no value and are accepted: Shopify's Decimal scalar can render
+ * a whole yen amount as "1000.0".
  */
 export function parseMoney(amount: string, currency: string): bigint {
   const exponent = currencyExponent(currency);
@@ -92,7 +94,11 @@ export function parseMoney(amount: string, currency: string): bigint {
     throw new InvalidAmountError(amount, "expected a plain decimal number");
   }
 
-  const [, sign, whole, fraction = ""] = match;
+  const [, sign, whole, rawFraction = ""] = match;
+  const fraction =
+    rawFraction.length > exponent && /^0*$/.test(rawFraction.slice(exponent))
+      ? rawFraction.slice(0, exponent)
+      : rawFraction;
 
   if (fraction.length > exponent) {
     throw new InvalidAmountError(
