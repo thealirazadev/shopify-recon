@@ -80,17 +80,18 @@ function absolute(value: bigint): bigint {
 }
 
 /**
- * The expected fee for an amount: amount * feePercentBps / 10000 plus the fixed
- * fee, with a tolerance of feeToleranceBps of the amount. Integer division
- * truncates, which can move the expected fee by at most one minor unit, so a
- * tolerance of zero makes the band exact to within that truncation.
+ * The expected fee for an amount: amount * feePercentBps / 10000 rounded half
+ * up to a whole minor unit, plus the fixed fee, with a tolerance of
+ * feeToleranceBps of the amount. Rounding to the nearest unit, as a processor
+ * bills it, keeps a tolerance of zero from flagging a correctly charged fee
+ * that truncation would have put one minor unit below.
  */
 export function feeBand(amountMinor: bigint, settings: ReconSettings): FeeBand {
   const amount = absolute(amountMinor);
 
   return {
     expectedMinor:
-      (amount * BigInt(settings.feePercentBps)) / 10_000n + BigInt(settings.feeFixedMinor),
+      (amount * BigInt(settings.feePercentBps) + 5_000n) / 10_000n + BigInt(settings.feeFixedMinor),
     toleranceMinor: (amount * BigInt(settings.feeToleranceBps)) / 10_000n,
   };
 }
