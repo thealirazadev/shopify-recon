@@ -100,12 +100,51 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Adapts the Shopify Remix admin context to the executor the client drives. */
-export function adminExecutor(admin: AdminApiContext): GraphqlExecutor {
-  return async (query, variables) => {
-    const response = await admin.graphql(query, { variables });
+/**
+ * The package's GraphQL client throws instead of returning when a response
+ * carries GraphQL errors (THROTTLED included), keeping the parsed body on the
+ * error with the error list nested under `errors.graphQLErrors`. This rebuilds
+ * the plain response body from such an error, or returns null for any other
+ * failure, so the throttled client still sees the cost and the error codes.
+ */
+export function graphqlErrorBody(error: unknown): GraphqlBody<unknown> | null {
+  if (!error || typeof error !== "object" || !("body" in error)) {
+    return null;
+  }
 
-    return response.json();
+  const body = (error as { body?: unknown }).body as
+    | { data?: unknown; errors?: { graphQLErrors?: unknown }; extensions?: unknown }
+    | null
+    | undefined;
+  const graphQLErrors = body?.errors?.graphQLErrors;
+
+  if (!Array.isArray(graphQLErrors) || graphQLErrors.length === 0) {
+    return null;
+  }
+
+  return {
+    data: body?.data,
+    errors: graphQLErrors,
+    extensions: body?.extensions as GraphqlBody<unknown>["extensions"],
+  };
+}
+
+/** Adapts the Shopify Remix admin context to the executor the client drives. */
+export function adminExecutor(admin: Pick<AdminApiContext, "graphql">): GraphqlExecutor {
+  return async (query, variables) => {
+    try {
+      const response = await admin.graphql(query, { variables });
+
+      return await response.json();
+    } catch (error) {
+      const body = graphqlErrorBody(error);
+
+      if (body) {
+        return body;
+      }
+
+      throw error;
+    }
   };
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { UpstreamError } from "~/lib/errors";
 import {
+  adminExecutor,
   computeSleepMs,
   createThrottledClient,
   DEFAULT_COST_ESTIMATE,
@@ -152,5 +153,90 @@ describe("createThrottledClient", () => {
 
     await expect(client.request("Probe", "query Probe { nope }")).rejects.toThrow(/doesn't exist/);
     expect(calls).toBe(1);
+  });
+});
+
+// Shaped like the package's GraphqlQueryError: the client throws on a response
+// with GraphQL errors and keeps the parsed body, with the errors nested.
+function graphqlQueryError(body: { data?: unknown; errors: unknown[]; extensions?: unknown }) {
+  return Object.assign(new Error("GraphQL operation failed"), {
+    body: {
+      data: body.data,
+      extensions: body.extensions,
+      errors: { networkStatusCode: 200, message: "failed", graphQLErrors: body.errors },
+    },
+  });
+}
+
+function fakeAdmin(graphql: () => Promise<Response>) {
+  return { graphql } as unknown as Parameters<typeof adminExecutor>[0];
+}
+
+describe("adminExecutor", () => {
+  it("returns a successful response body unchanged", async () => {
+    const execute = adminExecutor(
+      fakeAdmin(async () => new Response(JSON.stringify({ data: { ok: true } }))),
+    );
+
+    await expect(execute("query { ok }")).resolves.toStrictEqual({ data: { ok: true } });
+  });
+
+  it("hands a thrown throttle back as a body so the client paces and retries", async () => {
+    const slept: number[] = [];
+    let calls = 0;
+    const execute = adminExecutor(
+      fakeAdmin(async () => {
+        calls += 1;
+
+        if (calls === 1) {
+          throw graphqlQueryError(THROTTLED_BODY);
+        }
+
+        return new Response(
+          JSON.stringify({ data: { ok: true }, extensions: { cost: costed(900, 10) } }),
+        );
+      }),
+    );
+    const client = createThrottledClient(execute, "test.myshopify.com", {
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+
+    await expect(client.request("Probe", "query Probe { ok }")).resolves.toStrictEqual({
+      ok: true,
+    });
+    expect(calls).toBe(2);
+    // The retry is paced from the budget the throttled response reported (5
+    // points against a cost of 10), which a blind transport retry never sees.
+    expect(slept).toStrictEqual([RETRY_DELAY_MS, 100]);
+  });
+
+  it("surfaces a thrown query rejection without retrying it", async () => {
+    let calls = 0;
+    const execute = adminExecutor(
+      fakeAdmin(async () => {
+        calls += 1;
+        throw graphqlQueryError({ errors: [{ message: "Access denied for payouts" }] });
+      }),
+    );
+    const client = createThrottledClient(execute, "test.myshopify.com", {
+      sleep: async () => {},
+    });
+
+    await expect(client.request("Probe", "query Probe { ok }")).rejects.toThrow(
+      /rejected Probe: Access denied for payouts/,
+    );
+    expect(calls).toBe(1);
+  });
+
+  it("rethrows failures that carry no GraphQL body", async () => {
+    const execute = adminExecutor(
+      fakeAdmin(async () => {
+        throw new Error("socket hang up");
+      }),
+    );
+
+    await expect(execute("query { ok }")).rejects.toThrow(/socket hang up/);
   });
 });
