@@ -2,8 +2,7 @@
 
 Follows the conventions of `shopify-bulk-editor` (same OAuth, Prisma session storage, webhook
 verification, Polaris, and in-process worker patterns). This document covers what is different:
-the sync engine, the matching pipeline, money and timezone handling, and the invariants. A
-coding agent must be able to implement the project from this file alone.
+the sync engine, the matching pipeline, money and timezone handling, and the invariants. An engineer must be able to implement the project from this file alone.
 
 ## App flow
 
@@ -247,7 +246,7 @@ committed. Node 20 LTS; Shopify CLI for dev tunneling.
 
 ## Data model
 
-Tables and columns named here are the contract; the coding agent must not rename them. SQLite
+Tables and columns named here are the contract; implementations must not rename them. SQLite
 does not support Prisma enums, so status/type fields are strings enforced in code. All `*Minor`
 columns are `BigInt` (8-byte) integer minor units. Primary keys are `cuid()` strings, omitted
 below. `Session` is the Prisma session storage adapter model, verbatim as in
