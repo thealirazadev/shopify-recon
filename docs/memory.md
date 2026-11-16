@@ -289,3 +289,11 @@ pipeline, each under 50 lines of code and directly pushed to main. Files created
 
 All stubs/skeletons are placeholders with TODO markers for Phase 3 full implementation. Test suite
 (73 tests) passes clean; typecheck and lint pass after minor formatting fixes.
+
+## 2026-11-17 - Dependabot cleanup
+
+Refreshed the lockfile (brace-expansion, postcss-selector-parser, morgan, js-yaml) and added
+overrides: qs 6.16.2, react-router and react-router-dom 6.30.6, deepmerge-ts 8.0.0, nanoid 3.3.18.
+Lint, typecheck, tests and build pass. Left open: turbo-stream (high, fix is 3.0.0). v3 changes
+`decode` to return the value directly, which breaks Remix 2.17.5 single fetch, so it needs a Remix
+upgrade. Also left: minimatch/glob (dev only, needs a major), deepmerge (no fix published).
