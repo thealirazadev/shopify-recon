@@ -37,8 +37,8 @@ the dashboard, discrepancy queue, and CSV export are not built yet. See Status b
   breakdown, discrepancy queue, and settings for the fee band and aging window.
 - Accountant-ready CSV export per payout or date range: one balanced journal row set per
   payout, shop-timezone period boundaries, formula-injection guarded.
-- Freshness via the payouts webhook where available, with a polling fallback that alone
-  guarantees convergence.
+- Freshness from a poller that alone guarantees convergence. The webhook route also treats any
+  delivered payout topic as a sync trigger, but no payout topic is subscribed today.
 
 Out of scope: multi-store aggregation, direct QuickBooks/Xero push (CSV only), tax logic, and
 gateways other than Shopify Payments.
@@ -47,7 +47,9 @@ gateways other than Shopify Payments.
 
 - Remix (Vite) + TypeScript (strict), embedded via App Bridge, UI in Polaris
 - @shopify/shopify-app-remix for OAuth, session storage, and webhook verification
-- Prisma with SQLite by default (PostgreSQL supported)
+- Prisma with SQLite (the datasource provider is fixed in `prisma/schema.prisma`; moving to
+  PostgreSQL means changing that provider and regenerating the migrations, not only
+  `DATABASE_URL`)
 - Shopify Admin GraphQL API (read-only scopes)
 - Vitest
 
@@ -65,10 +67,10 @@ gateways other than Shopify Payments.
 
 The sync engine is implemented and tested: OAuth and session storage, incremental payout,
 balance transaction, order, and refund sync with cost-aware throttling and idempotent writes,
-single-flight runs per shop with crash recovery, a poller plus payouts webhook trigger, and a
-manual "Sync now" action. The pure matching (`app/lib/match.ts`), payout rollup
-(`app/lib/rollup.ts`), and discrepancy rules (`app/lib/anomalies.ts`) are written but not yet
-run by a reconciliation pass. The reconciliation pass, the payout detail and discrepancy
-screens, settings, and the CSV export are not built yet; placeholder modules under `app/lib` and
-`app/sync` mark where some of them go. Everything has been tested against stubbed Admin API
-responses only, not a live store.
+single-flight runs per shop with crash recovery, a poller, and a manual "Sync now" action. The
+pure matching (`app/lib/match.ts`), payout rollup (`app/lib/rollup.ts`), and discrepancy rules
+(`app/lib/anomalies.ts`) are written and unit tested but not yet run by a reconciliation pass.
+The reconciliation pass, the payout detail and discrepancy screens, settings, and the CSV export
+are not built yet, and the code holds no stand-ins for them. Webhooks are subscribed in
+`shopify.app.toml` and verified by `authenticate.webhook`. Everything has been tested against
+stubbed Admin API responses only, not a live store.

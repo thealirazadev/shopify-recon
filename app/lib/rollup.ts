@@ -79,8 +79,9 @@ function totalsFor(payout: RollupPayout, lines: ReadonlyArray<RollupLine>): Roll
  *
  * A line denominated in another currency is left out of the sums, because no
  * total may cross currencies. Its amount is then missing from the computed net,
- * which surfaces as variance, and the line itself surfaces as a
- * currency_mismatch discrepancy.
+ * and the line itself surfaces as a currency_mismatch discrepancy. The payout
+ * is never `reconciled` while such a line exists, even when the remaining
+ * lines happen to add up to the deposit, because the totals did not count it.
  */
 export function rollupPayout(payout: RollupPayout, lines: ReadonlyArray<RollupLine>): RollupResult {
   if (payout.status !== "paid" || payout.transactionsSyncedAt === null) {
@@ -92,7 +93,8 @@ export function rollupPayout(payout: RollupPayout, lines: ReadonlyArray<RollupLi
     lines.filter((line) => line.currency === payout.currency),
   );
   const reconciled =
-    totals.varianceMinor === 0n && lines.every((line) => line.matchState === "matched");
+    totals.varianceMinor === 0n &&
+    lines.every((line) => line.matchState === "matched" && line.currency === payout.currency);
 
   return { reconStatus: reconciled ? "reconciled" : "variance", totals };
 }

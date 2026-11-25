@@ -20,15 +20,15 @@
 
 ### What exists today
 
-- Unit: `money.test.ts`, `dates.test.ts`, `diff.test.ts`, and `sync/throttle.test.ts` (pacing
-  and the single `THROTTLED` retry).
+- Unit: `money.test.ts`, `dates.test.ts`, `diff.test.ts`, `match.test.ts` (every state and
+  reason, refund sign handling, refund disambiguation, determinism), `rollup.test.ts` (each
+  total, variance sign, every `reconStatus` condition, foreign-currency lines),
+  `anomalies.test.ts` (each rule firing and not firing, fee band edges, aging boundary), and
+  `sync/throttle.test.ts` (pacing and the single `THROTTLED` retry).
 - Integration: `sync/sync.test.ts` (idempotency, crash recovery, watermarks, claims and
   supersedes, against a real SQLite file and a stubbed executor) and `sync/poller.test.ts`.
-- Placeholders: `order.test.ts`, `transaction.test.ts`, `discrepancy.test.ts`, and
-  `sync/integration.test.ts` assert only on literal values and do not exercise application
-  code yet.
-- Not yet covered: `match.ts`, `rollup.ts`, `anomalies.ts`, the CSV builder, and route-level
-  tests. The list below is the target coverage.
+- Not yet covered: the CSV builder and the reconciliation pass (neither exists yet) and
+  route-level tests. The list below is the target coverage.
 
 ### What to cover
 
