@@ -53,6 +53,25 @@ gateways other than Shopify Payments.
 - Shopify Admin GraphQL API (read-only scopes)
 - Vitest
 
+## Quick start
+
+Requires Node.js 18.20 or later, the Shopify CLI, and a Partner app with a development store.
+
+```sh
+npm install
+cp .env.example .env   # fill in SHOPIFY_API_KEY, SHOPIFY_API_SECRET and SHOPIFY_APP_URL
+npm run prisma:generate
+npm run prisma:migrate # creates the SQLite database from prisma/migrations
+npm run dev            # shopify app dev: tunnel, OAuth install and hot reload
+```
+
+`RECON_POLL_MINUTES` in `.env` sets the minutes between automatic syncs per shop (default 360,
+also the value in the example file). Before pushing, run the same gates as CI:
+
+```sh
+npm run lint && npm run typecheck && npm test && npm run build
+```
+
 ## Documentation
 
 | File | Contents |
