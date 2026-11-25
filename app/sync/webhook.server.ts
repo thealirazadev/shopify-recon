@@ -1,4 +1,4 @@
-// Webhook handler stub for Phase 3 reconciliation events.
+// Webhook handler stub for reconciliation events (not implemented yet).
 // Handles reconciliation-related webhook events.
 
 export interface WebhookEvent {
@@ -8,10 +8,10 @@ export interface WebhookEvent {
 }
 
 export async function handleReconWebhook(_event: WebhookEvent): Promise<void> {
-  // Stub: to be implemented in Phase 3
+  // Stub: not implemented yet
 }
 
 export function validateWebhookSignature(signature: string, body: string): boolean {
-  // Stub: to be implemented in Phase 3
+  // Stub: not implemented yet
   return false;
 }

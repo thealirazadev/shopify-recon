@@ -63,8 +63,8 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 }
 
-// Placeholder payout list. Phase 4 replaces the empty state with the filtered
-// IndexTable described in docs/design.md.
+// Placeholder payout list: shows sync status and an empty state until the
+// filtered IndexTable described in docs/design.md is built.
 export default function PayoutList() {
   const { activeRun, lastRun } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();

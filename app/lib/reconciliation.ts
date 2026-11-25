@@ -1,4 +1,4 @@
-// Reconciliation entity types and interfaces for Phase 3.
+// Reconciliation entity types and interfaces.
 // Defines the core reconciliation structures.
 
 export interface OrderReconciliation {

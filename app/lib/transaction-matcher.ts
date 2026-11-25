@@ -1,4 +1,4 @@
-// Transaction matching stub for Phase 3 reconciliation.
+// Transaction matching stub (not implemented yet).
 // Provides matching functionality between balance and order transactions.
 
 export interface TransactionMatch {
@@ -9,7 +9,7 @@ export interface TransactionMatch {
 }
 
 export function matchTransaction(balanceId: string, orderIds: string[]): TransactionMatch {
-  // Stub: to be implemented in Phase 3
+  // Stub: not implemented yet
   return {
     balanceTransactionId: balanceId,
     orderTransactionId: null,

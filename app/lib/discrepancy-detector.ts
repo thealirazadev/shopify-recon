@@ -1,4 +1,4 @@
-// Discrepancy detector skeleton for Phase 3.
+// Discrepancy detector skeleton (not implemented yet).
 // Detects and reports discrepancies in reconciliation.
 
 export interface Discrepancy {
@@ -10,17 +10,17 @@ export interface Discrepancy {
 
 export class DiscrepancyDetector {
   async detectVariance(): Promise<Discrepancy[]> {
-    // Stub: to be implemented in Phase 3
+    // Stub: not implemented yet
     return [];
   }
 
   async detectMismatches(): Promise<Discrepancy[]> {
-    // Stub: to be implemented in Phase 3
+    // Stub: not implemented yet
     return [];
   }
 
   async detectFeeAnomalies(): Promise<Discrepancy[]> {
-    // Stub: to be implemented in Phase 3
+    // Stub: not implemented yet
     return [];
   }
 }

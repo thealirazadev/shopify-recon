@@ -1,10 +1,10 @@
 # shopify-recon
 
-Payout reconciliation for Shopify Payments merchants, planned as an embedded Shopify app. It
-will sync payouts, their balance transactions, orders, and refunds from the Admin GraphQL API
-into local tables, match every balance transaction to its source, prove that each payout's
-computed net equals the amount Shopify deposited, and turn everything that does not add up into
-an explicit, workable discrepancy queue - with a journal-style CSV export an accountant can
+Payout reconciliation for Shopify Payments merchants, built as an embedded Shopify app. It
+syncs payouts, their balance transactions, orders, and refunds from the Admin GraphQL API into
+local tables. The goal is to match every balance transaction to its source, prove that each
+payout's computed net equals the amount Shopify deposited, and turn everything that does not add
+up into an explicit, workable discrepancy queue, with a journal-style CSV export an accountant can
 post directly.
 
 ## The problem
@@ -15,9 +15,11 @@ whose money never arrived in any payout. Merchants and bookkeepers reconcile by 
 spreadsheets at month end, and errors - a fee overcharge, a missed refund, a charge that never
 reached a payout - go unseen because nothing is looking.
 
-## Planned features
+## Features
 
-All of the following is planned behavior; implementation has not started.
+Sync and freshness (the first and last items) are implemented. Matching, the payout rollup, and
+the discrepancy rules exist as pure modules that are not yet wired into a reconciliation pass;
+the dashboard, discrepancy queue, and CSV export are not built yet. See Status below.
 
 - Incremental sync of payouts, balance transactions, orders, and refunds with persisted
   cursors, cost-aware GraphQL throttling, and idempotent upserts keyed by Shopify GIDs (a
@@ -53,17 +55,20 @@ gateways other than Shopify Payments.
 
 | File | Contents |
 | --- | --- |
-| [docs/PRD.md](docs/PRD.md) | Problem, users, stories, requirements, success criteria |
 | [docs/architecture.md](docs/architecture.md) | Sync engine, matching pipeline, data model, failure modes, invariants |
-| [docs/rules.md](docs/rules.md) | Project-specific engineering rules |
-| [docs/phases.md](docs/phases.md) | Implementation phases with commit plans and verification checklists |
 | [docs/design.md](docs/design.md) | Screens, states, and Polaris usage |
-| [docs/testing.md](docs/testing.md) | Test strategy, coverage map, commands, CI plan |
+| [docs/testing.md](docs/testing.md) | Test strategy, coverage map, commands, CI |
 | [docs/api-contracts.md](docs/api-contracts.md) | Routes, shapes, GraphQL operations, CSV format, error envelope |
-| [docs/launch-checklist.md](docs/launch-checklist.md) | Pre-production verification |
-| [docs/memory.md](docs/memory.md) | Working log and decisions |
+| [docs/decisions.md](docs/decisions.md) | Design decisions and the edge cases behind them |
 
 ## Status
 
-Planning stage. This repository currently contains documentation only; implementation follows
-the phases in [docs/phases.md](docs/phases.md), one approved phase at a time.
+The sync engine is implemented and tested: OAuth and session storage, incremental payout,
+balance transaction, order, and refund sync with cost-aware throttling and idempotent writes,
+single-flight runs per shop with crash recovery, a poller plus payouts webhook trigger, and a
+manual "Sync now" action. The pure matching (`app/lib/match.ts`), payout rollup
+(`app/lib/rollup.ts`), and discrepancy rules (`app/lib/anomalies.ts`) are written but not yet
+run by a reconciliation pass. The reconciliation pass, the payout detail and discrepancy
+screens, settings, and the CSV export are not built yet; placeholder modules under `app/lib` and
+`app/sync` mark where some of them go. Everything has been tested against stubbed Admin API
+responses only, not a live store.

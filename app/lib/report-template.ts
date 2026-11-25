@@ -1,4 +1,4 @@
-// Reconciliation report template for Phase 3.
+// Reconciliation report template (not implemented yet).
 // Defines the structure of reconciliation reports.
 
 export interface ReportSection {
@@ -14,7 +14,7 @@ export interface ReconciliationReport {
 }
 
 export function createReportTemplate(): ReconciliationReport {
-  // Stub: to be implemented in Phase 3
+  // Stub: not implemented yet
   return {
     shopId: "",
     reportDate: new Date(),
@@ -24,6 +24,6 @@ export function createReportTemplate(): ReconciliationReport {
 }
 
 export function formatReport(report: ReconciliationReport): string {
-  // Stub: to be implemented in Phase 3
+  // Stub: not implemented yet
   return "";
 }
