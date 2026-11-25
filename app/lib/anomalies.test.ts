@@ -227,9 +227,10 @@ describe("payoutAnomalies", () => {
   });
 });
 
+const NOW = new Date("2026-07-30T00:00:00Z");
+const CUTOFF = new Date("2026-07-23T00:00:00Z");
+
 describe("agingAnomalies", () => {
-  const NOW = new Date("2026-07-30T00:00:00Z");
-  const CUTOFF = new Date("2026-07-23T00:00:00Z");
 
   function candidate(overrides: Partial<AgingCandidate> = {}): AgingCandidate {
     return {
