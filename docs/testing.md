@@ -14,9 +14,21 @@
 - **Loaders and actions get request-level tests** with `authenticate.admin` mocked to a fixed
   session: filters, pagination, shop scoping (foreign ids -> `NOT_FOUND`), action validation,
   conflict paths, and the error envelope shape.
-- **Manual end-to-end happens on a dev store** per the checklists in `docs/phases.md`: OAuth,
-  embedded rendering, real sync against seeded orders, webhook delivery. This is the only
-  layer not automated, because it requires Shopify infrastructure.
+- **Manual end-to-end happens on a dev store**: OAuth, embedded rendering, real sync against
+  seeded orders, webhook delivery. This is the only layer not automated, because it requires
+  Shopify infrastructure, and it has not been run yet.
+
+### What exists today
+
+- Unit: `money.test.ts`, `dates.test.ts`, `diff.test.ts`, and `sync/throttle.test.ts` (pacing
+  and the single `THROTTLED` retry).
+- Integration: `sync/sync.test.ts` (idempotency, crash recovery, watermarks, claims and
+  supersedes, against a real SQLite file and a stubbed executor) and `sync/poller.test.ts`.
+- Placeholders: `order.test.ts`, `transaction.test.ts`, `discrepancy.test.ts`, and
+  `sync/integration.test.ts` assert only on literal values and do not exercise application
+  code yet.
+- Not yet covered: `match.ts`, `rollup.ts`, `anomalies.ts`, the CSV builder, and route-level
+  tests. The list below is the target coverage.
 
 ### What to cover
 
@@ -65,18 +77,17 @@ npx prisma migrate dev
 npm run dev              # shopify app dev (tunnels to the dev store)
 ```
 
-## CI plan
+## CI
 
-GitHub Actions on push and pull request to `main`: Node 20, `npm ci`, `npm run typecheck`,
-`npm run lint`, `npm test`. The suite must not need Shopify credentials; anything requiring a
-real store stays in the manual checklists. CI is added when the repository goes public, running
-exactly the commands above, nothing more.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request against `main`, on
+Node 22:
 
-## Definition of "done" for a feature
+1. `npm ci`
+2. `npm run prisma:generate`
+3. `npm run lint`
+4. `npm run typecheck`
+5. `npm test` (`vitest run`)
+6. `npm run build`
 
-1. `npm run typecheck` and `npm run lint` clean.
-2. `npm test` green, new tests included in the same commit series.
-3. The feature's manual checklist items in `docs/phases.md` pass on the dev store.
-
-After creating or editing files, run the checks and fix all errors before reporting done. One
-commit per feature, in the order listed in `docs/phases.md`.
+The suite needs no Shopify credentials; anything requiring a real store stays manual. There is
+no coverage threshold.

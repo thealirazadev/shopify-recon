@@ -230,8 +230,9 @@ poller carries freshness alone; nothing else changes.
 ## Admin GraphQL operations
 
 Representative operations the sync engine runs (API version pinned in `shopify.server.ts`).
-Field availability must be verified against the pinned version at implementation time; any
-divergence is flagged to the owner before coding around it. All calls go through the throttled
+Field availability follows Shopify's documentation for the pinned version and has not been
+checked against a live store; a divergence fails the run with `UPSTREAM_ERROR` and leaves the
+sync cursors where they were. All calls go through the throttled
 client; every response's `errors` array is checked.
 
 ### `PayoutsPage` (payout sync, newest first)

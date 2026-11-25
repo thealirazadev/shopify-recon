@@ -1,4 +1,4 @@
-// Status enums for Phase 3 reconciliation states.
+// Status enums for reconciliation states.
 // Defines all possible status values used in the recon system.
 
 export const MatchStatus = {
