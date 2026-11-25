@@ -18,8 +18,11 @@ the sync engine, the matching pipeline, money and timezone handling, and the inv
    totals and status, detection upserts the discrepancy queue; all deterministic, re-runnable.
 5. **Browse and export** - Payout list, payout detail with the line-by-line breakdown,
    discrepancy queue, settings; resource routes serve journal CSV per payout or date range.
-6. **Webhooks** - Single HMAC-verified endpoint: `app/uninstalled`, `app/scopes_update`, the
-   three compliance topics, and the payouts topic where the pinned API version offers it.
+6. **Webhooks** - Single HMAC-verified endpoint for the topics subscribed in
+   `shopify.app.toml`: `app/uninstalled`, `app/scopes_update`, and the three compliance topics.
+   A delivered payout topic would be treated as a sync trigger, but none is subscribed (see
+   `docs/decisions.md`, section 7). Subscriptions live only in the TOML; nothing registers them
+   per shop after OAuth, so each event is delivered once.
 
 ## Decision: per-payout balance transaction fetch, not a global stream
 
@@ -129,12 +132,11 @@ call's cost from the last actual cost of the same operation (default 50 points u
 and sleeps `(needed - available) / restoreRate` seconds when short. A `THROTTLED` error retries
 once after the computed wait, then fails the run. Same pattern as `shopify-bulk-editor`.
 
-**Freshness.** Primary: the Shopify Payments payouts webhook topic, registered when the pinned
-API version exposes it; the handler validates HMAC, records a pending trigger, and returns 200
-immediately. Fallback: an in-process poller singleton (module-level, guarded against Vite HMR
+**Freshness.** An in-process poller singleton (module-level, guarded against Vite HMR
 re-instantiation like the Prisma client) starting a run per shop every `RECON_POLL_MINUTES`
-(default 360). The poller alone is sufficient for correctness; the webhook only reduces
-latency; manual "Sync now" uses the same claim path.
+(default 360). The poller alone is sufficient for correctness. A payout webhook, if one is ever
+subscribed, only reduces latency: the handler records a pending trigger and returns 200
+immediately. Manual "Sync now" uses the same claim path.
 
 ## Money precision
 
@@ -189,6 +191,9 @@ are recomputed only by a full re-sync.
 
 ## Folder and file tree
 
+This is the target layout. The payout detail, export, discrepancy, and settings routes,
+`csv.server.ts`, and `recon.server.ts` are not built yet (see the README's Status section).
+
 ```
 shopify-recon/
   app/
@@ -229,16 +234,16 @@ shopify-recon/
 ## Tech stack with rationale
 
 Same core stack as `shopify-bulk-editor`; exact versions pinned at install time, lockfile
-committed. Node 20 LTS; Shopify CLI for dev tunneling.
+committed. Node 22 in CI (`engines` allows 18.20 and later); Shopify CLI for dev tunneling.
 
 - **Remix 2 (Vite) + TypeScript 5 (strict)** - Loader/action model fits per-request Shopify
   auth; the official Shopify package targets it.
-- **@shopify/shopify-app-remix** - OAuth, session token validation, webhook verification and
-  registration. **@shopify/polaris + @shopify/app-bridge-react** - native Admin look, embedded
+- **@shopify/shopify-app-remix** - OAuth, session token validation, and webhook HMAC
+  verification (subscriptions are declared in `shopify.app.toml`). **@shopify/polaris + @shopify/app-bridge-react** - native Admin look, embedded
   framing. No hand-rolled auth, no other UI framework.
-- **Prisma + SQLite (dev, default) / PostgreSQL (supported)** - First-class session adapter;
-  the mirror tables need nothing beyond a relational store; same schema on both engines via
-  `DATABASE_URL`.
+- **Prisma + SQLite** - First-class session adapter; the mirror tables need nothing beyond a
+  relational store. Prisma fixes the provider in `schema.prisma`, so PostgreSQL needs the
+  provider changed and the migrations regenerated; `DATABASE_URL` alone cannot switch engines.
 - **Vitest** - Unit tests for the pure logic carrying the correctness guarantees; integration
   tests for the sync engine against a stubbed GraphQL client.
 - **No queue library, no Redis** - Sync volume is one run per shop every few hours; the
@@ -343,7 +348,7 @@ Everything is keyed by `shop`; no cross-shop reads exist.
 
 Shopify Admin GraphQL API (version pinned in `shopify.server.ts`, upgraded deliberately);
 OAuth and webhooks via `@shopify/shopify-app-remix`; Shopify CLI tunneling in dev only;
-SQLite or PostgreSQL via `DATABASE_URL`.
+SQLite via `DATABASE_URL` (the provider itself is set in `prisma/schema.prisma`).
 
 ## Required environment variables
 
@@ -353,7 +358,7 @@ SQLite or PostgreSQL via `DATABASE_URL`.
 | `SHOPIFY_API_SECRET` | App Client Secret. Verifies webhook HMAC, exchanges OAuth codes. |
 | `SCOPES` | `read_orders,read_shopify_payments_payouts` |
 | `SHOPIFY_APP_URL` | Public HTTPS base URL (tunnel in dev). |
-| `DATABASE_URL` | Prisma connection string. SQLite file in dev; PostgreSQL in prod. |
+| `DATABASE_URL` | Prisma connection string for the SQLite file (for example `file:./dev.sqlite`). |
 | `RECON_POLL_MINUTES` | Poller interval per shop (default 360). |
 
 All documented with dummies in `.env.example`; startup fails fast if any is missing.
